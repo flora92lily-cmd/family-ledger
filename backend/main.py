@@ -1,7 +1,10 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.database import init_db, async_session
 from app.routers import categories, transactions, imports, holdings, accounts
 from app.routers import tags, reimbursements, members
@@ -50,3 +53,13 @@ app.include_router(reimbursements.router)
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# 托管 React 前端（生产环境，dist/ 存在时生效）
+_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+if os.path.isdir(_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_dist, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        return FileResponse(os.path.join(_dist, "index.html"))
