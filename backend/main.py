@@ -59,7 +59,13 @@ async def health():
 _dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 if os.path.isdir(_dist):
     app.mount("/assets", StaticFiles(directory=os.path.join(_dist, "assets")), name="assets")
+    app.mount("/icons", StaticFiles(directory=os.path.join(_dist, "icons")), name="icons")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # 如果请求的是实际存在的文件（如 manifest.json、favicon.svg），直接返回
+        file_path = os.path.join(_dist, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        # 否则返回 index.html（SPA 路由）
         return FileResponse(os.path.join(_dist, "index.html"))
