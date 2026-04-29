@@ -5,11 +5,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.types import Scope
 from app.database import init_db, async_session
 from app.routers import categories, transactions, imports, holdings, accounts
 from app.routers import tags, reimbursements, members
 from app.seed import seed_defaults
 from app.scheduler import create_scheduler, startup_backfill
+
+
+class CacheControlledStaticFiles(StaticFiles):
+    """根据文件类型设置不同 Cache-Control，确保 PWA 部署后能拿到最新版本。
+
+    - index.html / manifest.json：每次都向服务器校验（no-cache）
+    - /assets/*：Vite 输出带 hash，可永久缓存（immutable）
+    - 其他（图标等无 hash 静态文件）：短缓存 1 小时
+    """
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            if path in ("", "index.html", "manifest.json") or path.endswith(".html"):
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            elif path.startswith("assets/"):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
 
 
 @asynccontextmanager
@@ -61,4 +81,4 @@ async def health():
 # API 路由在上方已注册，优先级高于此挂载点，不会被拦截。
 _dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 if os.path.isdir(_dist):
-    app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
+    app.mount("/", CacheControlledStaticFiles(directory=_dist, html=True), name="static")
