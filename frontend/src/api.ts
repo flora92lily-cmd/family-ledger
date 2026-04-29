@@ -278,15 +278,18 @@ export const categoryApi = {
 }
 
 export const importApi = {
-  parse: (source: string, file: File) => {
+  parse: (source: string, file: File, opts?: { start_date?: string; end_date?: string }) => {
     const fd = new FormData()
     fd.append('source', source)
     fd.append('file', file)
+    if (opts?.start_date) fd.append('start_date', opts.start_date)
+    if (opts?.end_date) fd.append('end_date', opts.end_date)
     return api.post<{
       count: number
       dup_count: number
       reim_count: number
       reim_dup_count: number
+      filtered_out?: number
       transactions: ParsedTransaction[]
       reimbursements: ParsedReimbursement[]
       message?: string

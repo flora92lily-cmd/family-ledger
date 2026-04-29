@@ -149,9 +149,18 @@ def _match_account_by_name(payment_method: str, accounts: list[Account]) -> Opti
 async def parse_bill(
     source: str = Form(...),
     file: UploadFile = File(...),
+    start_date: Optional[date] = Form(None),
+    end_date: Optional[date] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """解析上传的账单文件，返回交易列表 + 报销记录列表（均未入库）"""
+    """解析上传的账单文件，返回交易列表 + 报销记录列表（均未入库）
+
+    可选 start_date / end_date：按账单日期过滤（含端点）。主要用于钱迹这类
+    一次性导出所有历史的来源，避免重复处理已入库的旧账单。
+    """
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+
     try:
         parser = get_parser(source)
     except ValueError as e:
@@ -174,6 +183,19 @@ async def parse_bill(
     # 拆分：Transaction 和 ReimbursementRecord
     transactions = [t for t in items if not isinstance(t, ParsedReimbursement)]
     reimbursements = [r for r in items if isinstance(r, ParsedReimbursement)]
+
+    # 按日期范围过滤（如指定）
+    raw_total = len(transactions) + len(reimbursements)
+    if start_date or end_date:
+        def _in_range(d: date) -> bool:
+            if start_date and d < start_date:
+                return False
+            if end_date and d > end_date:
+                return False
+            return True
+        transactions = [t for t in transactions if _in_range(t.date)]
+        reimbursements = [r for r in reimbursements if _in_range(r.date)]
+    filtered_out = raw_total - (len(transactions) + len(reimbursements))
 
     # 智能分类（仅对 Transaction）
     transactions = await categorize_transactions(transactions, db)
@@ -270,13 +292,19 @@ async def parse_bill(
             "to_account_id": matched_acc,
         })
 
+    msg = ""
+    if filtered_out > 0 and not parsed_out and not reim_out:
+        msg = f"日期范围内未匹配到任何记录（共过滤掉 {filtered_out} 条）"
+
     return {
         "count": len(parsed_out),
         "dup_count": len(duplicate_indices),
         "reim_count": len(reim_out),
         "reim_dup_count": len(reim_dup),
+        "filtered_out": filtered_out,
         "transactions": parsed_out,
         "reimbursements": reim_out,
+        "message": msg,
     }
 
 

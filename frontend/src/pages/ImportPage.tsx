@@ -65,6 +65,10 @@ export default function ImportPage() {
   const [step, setStep] = useState<'select' | 'preview'>('select')
   const [source, setSource] = useState<string>('')
   const [parsing, setParsing] = useState(false)
+  // 钱迹专属：日期范围过滤（一次性导出全部历史时，限制只导入指定区间）
+  const [qianjiStartDate, setQianjiStartDate] = useState<string>('')
+  const [qianjiEndDate, setQianjiEndDate] = useState<string>('')
+  const [filteredOutCount, setFilteredOutCount] = useState(0)
   const [transactions, setTransactions] = useState<ParsedTransaction[]>([])
   const [selectedIdx, setSelectedIdx] = useState<Set<number>>(new Set())
   const [reimbursements, setReimbursements] = useState<ParsedReimbursement[]>([])
@@ -136,6 +140,16 @@ export default function ImportPage() {
 
   const handleSourceClick = (src: string) => {
     setSource(src)
+    // 钱迹需要先选日期范围（可选），点开后展示日期选择器，不直接弹文件选择
+    if (src === 'qianji') return
+    fileInputRef.current?.click()
+  }
+
+  const handleQianjiPickFile = () => {
+    if (qianjiStartDate && qianjiEndDate && qianjiStartDate > qianjiEndDate) {
+      alert('开始日期不能晚于结束日期')
+      return
+    }
     fileInputRef.current?.click()
   }
 
@@ -146,8 +160,14 @@ export default function ImportPage() {
     setParsing(true)
     setParseMessage('')
     try {
+      const parseOpts = source === 'qianji'
+        ? {
+            start_date: qianjiStartDate || undefined,
+            end_date: qianjiEndDate || undefined,
+          }
+        : undefined
       const [parseRes, acctRes] = await Promise.all([
-        importApi.parse(source, file),
+        importApi.parse(source, file, parseOpts),
         accountApi.list(),
       ])
       const loadedAccounts = acctRes.data
@@ -157,6 +177,7 @@ export default function ImportPage() {
       const reims = parseRes.data.reimbursements || []
       setDupCount(parseRes.data.dup_count || 0)
       setReimDupCount(parseRes.data.reim_dup_count || 0)
+      setFilteredOutCount(parseRes.data.filtered_out || 0)
 
       const fallbackHints = SOURCE_FALLBACK[source] || []
       const fallbackAccount = loadedAccounts.find(a =>
@@ -356,17 +377,55 @@ export default function ImportPage() {
             选择账单来源，上传文件后将自动解析并智能分类
           </div>
 
-          {SOURCES.map(s => (
-            <div key={s.value} onClick={() => handleSourceClick(s.value)}
-              style={{ background: 'white', borderRadius: 12, padding: 16, marginBottom: 12, display: 'flex', alignItems: 'center', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-              <div style={{ fontSize: 32, marginRight: 12 }}>{s.icon}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 16, fontWeight: 600 }}>{s.label}</div>
-                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{s.desc}</div>
+          {SOURCES.map(s => {
+            const isQianjiExpanded = s.value === 'qianji' && source === 'qianji'
+            return (
+              <div key={s.value}
+                style={{ marginBottom: 12 }}>
+                <div onClick={() => handleSourceClick(s.value)}
+                  style={{ background: 'white', borderRadius: isQianjiExpanded ? '12px 12px 0 0' : 12, padding: 16, display: 'flex', alignItems: 'center', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', borderBottom: isQianjiExpanded ? '1px solid #e5e7eb' : undefined }}>
+                  <div style={{ fontSize: 32, marginRight: 12 }}>{s.icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{s.label}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{s.desc}</div>
+                  </div>
+                  <div style={{ color: '#9ca3af' }}>{isQianjiExpanded ? '▾' : '›'}</div>
+                </div>
+
+                {isQianjiExpanded && (
+                  <div style={{ background: 'white', borderRadius: '0 0 12px 12px', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                    <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, marginBottom: 8 }}>
+                      📅 选择导入日期范围（可选）
+                    </div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+                      钱迹一次性导出全部历史，可在此限定本次只导入指定区间。留空则全部导入（仍会自动去重）。
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                      <input type="date" value={qianjiStartDate}
+                        onChange={e => setQianjiStartDate(e.target.value)}
+                        style={{ flex: 1, padding: '6px 8px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 6 }} />
+                      <span style={{ color: '#9ca3af' }}>至</span>
+                      <input type="date" value={qianjiEndDate}
+                        onChange={e => setQianjiEndDate(e.target.value)}
+                        style={{ flex: 1, padding: '6px 8px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 6 }} />
+                    </div>
+                    {(qianjiStartDate || qianjiEndDate) && (
+                      <div style={{ marginBottom: 10 }}>
+                        <button onClick={() => { setQianjiStartDate(''); setQianjiEndDate('') }}
+                          style={{ background: 'none', border: 'none', fontSize: 12, color: '#6b7280', cursor: 'pointer', padding: 0 }}>
+                          清空日期
+                        </button>
+                      </div>
+                    )}
+                    <button onClick={handleQianjiPickFile}
+                      style={{ width: '100%', padding: '10px', fontSize: 14, fontWeight: 500, background: '#3b82f6', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+                      选择文件
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ color: '#9ca3af' }}>›</div>
-            </div>
-          ))}
+            )
+          })}
 
           {parsing && <div style={{ textAlign: 'center', padding: 16, color: '#6b7280' }}>正在解析文件...</div>}
 
@@ -386,6 +445,17 @@ export default function ImportPage() {
       </div>
 
       <div style={{ padding: '0 16px' }}>
+        {filteredOutCount > 0 && (
+          <div style={{ margin: '8px 0', padding: '10px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, fontSize: 13, color: '#1e40af' }}>
+            📅 已按日期范围过滤掉 <strong>{filteredOutCount}</strong> 条不在区间内的记录
+            {(qianjiStartDate || qianjiEndDate) && (
+              <span style={{ color: '#3b82f6', marginLeft: 4 }}>
+                （{qianjiStartDate || '不限'} 至 {qianjiEndDate || '不限'}）
+              </span>
+            )}
+          </div>
+        )}
+
         {dupCount > 0 && (
           <div style={{ margin: '8px 0', padding: '10px 14px', background: '#fefce8', border: '1px solid #fde68a', borderRadius: 10, fontSize: 13, color: '#92400e' }}>
             ⚠️ 检测到 <strong>{dupCount}</strong> 条疑似重复（金额相同、日期相近），已默认取消勾选，可手动勾回
