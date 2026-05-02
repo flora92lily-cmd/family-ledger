@@ -141,8 +141,24 @@ export default function AddPage() {
       }
       navigate('/')
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } }
-      alert('保存失败：' + (err.response?.data?.detail || '请检查网络连接'))
+      // 兼容 FastAPI 两种错误格式：
+      //   1) HTTPException → detail: string
+      //   2) Pydantic 校验失败 → detail: [{loc, msg, type}, ...]
+      const err = e as {
+        response?: { status?: number; data?: { detail?: string | Array<{ loc?: unknown[]; msg?: string }> } }
+        message?: string
+      }
+      const detail = err.response?.data?.detail
+      let msg = ''
+      if (typeof detail === 'string') {
+        msg = detail
+      } else if (Array.isArray(detail)) {
+        msg = detail.map(d => `${d.loc?.slice(-1)?.[0] ?? ''}: ${d.msg ?? ''}`).join('\n')
+      } else {
+        msg = err.message || '请检查网络连接'
+      }
+      console.error('保存交易失败:', e)
+      alert(`保存失败 (${err.response?.status ?? '?'})：\n${msg}`)
     } finally {
       setSubmitting(false)
     }
