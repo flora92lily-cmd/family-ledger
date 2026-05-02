@@ -135,7 +135,6 @@ class Transaction(Base):
     member_id = Column(Integer, ForeignKey("family_members.id"), nullable=True)  # 归属家庭成员（NULL=未指定/共有）
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)    # 支出/收入来源账户
     to_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)  # 转账目标账户
-    note = Column(String(500), default="")
     # 报销相关字段
     is_reimbursable = Column(Boolean, default=False)            # 是否标记为"可报销"
     reimbursable_amount = Column(Float, default=0)              # 预期报销金额（默认=amount）

@@ -85,7 +85,6 @@ export interface Transaction {
   account_id: number | null
   to_account_id: number | null
   member_id: number | null
-  note: string
   is_reimbursable: boolean
   reimbursable_amount: number
   reimbursement_status: ReimbursementStatus
@@ -209,7 +208,6 @@ export interface ParsedTransaction {
   date: string
   description: string
   counterparty: string
-  note: string
   category_id: number | null
   category_name: string | null
   account_id: number | null
@@ -309,6 +307,7 @@ export const importApi = {
 export const transactionApi = {
   list: (params?: Record<string, unknown>) =>
     api.get<Transaction[]>('/api/transactions/', { params }),
+  get: (id: number) => api.get<Transaction>(`/api/transactions/${id}`),
   create: (data: Record<string, unknown>) => api.post<Transaction>('/api/transactions/', data),
   update: (id: number, data: Record<string, unknown>) =>
     api.patch<Transaction>(`/api/transactions/${id}`, data),

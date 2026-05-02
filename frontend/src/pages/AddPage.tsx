@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { transactionApi, categoryApi, tagApi, accountApi, memberApi, type CategoryTree, type Tag, type Account, type FamilyMember } from '../api'
 
@@ -7,6 +7,10 @@ type TxnType = 'expense' | 'income' | 'transfer'
 
 export default function AddPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const editId = searchParams.get('id')
+  const isEdit = !!editId
+
   const [type, setType] = useState<TxnType>('expense')
   const [amount, setAmount] = useState('')
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'))
@@ -22,6 +26,7 @@ export default function AddPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [members, setMembers] = useState<FamilyMember[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const [loading, setLoading] = useState(isEdit)
   // 报销相关
   const [isReimbursable, setIsReimbursable] = useState(false)
   const [reimbursableAmount, setReimbursableAmount] = useState('')
@@ -33,6 +38,50 @@ export default function AddPage() {
     accountApi.list().then(r => setAccounts(r.data))
     memberApi.list().then(r => setMembers(r.data))
   }, [])
+
+  // 编辑模式：加载交易并预填表单
+  useEffect(() => {
+    if (!editId) return
+    transactionApi.get(Number(editId)).then(r => {
+      const t = r.data
+      setType(t.type)
+      setAmount(String(t.amount))
+      setDate(t.date)
+      setCategoryId(t.category_id)
+      setAccountId(t.account_id)
+      setToAccountId(t.to_account_id)
+      setMemberId(t.member_id)
+      setNote(t.description || '')
+      setSelectedTagIds(t.tags.map(tag => tag.id))
+      setIsReimbursable(t.is_reimbursable)
+      setReimbursableAmount(t.reimbursable_amount ? String(t.reimbursable_amount) : '')
+      // 如果交易的分类是某个父分类的子分类，自动展开父级
+      if (t.category_id) {
+        for (const parent of catTree) {
+          if (parent.children.some(c => c.id === t.category_id)) {
+            setExpandedParent(parent.id)
+            break
+          }
+        }
+      }
+      setLoading(false)
+    }).catch(() => {
+      alert('加载交易失败')
+      navigate('/')
+    })
+    // 注意：catTree 在另一个 effect 里加载，分类展开逻辑见下
+  }, [editId])
+
+  // catTree 加载完成后，如果是编辑模式且 category_id 存在，补展开父分类
+  useEffect(() => {
+    if (!isEdit || !categoryId || catTree.length === 0) return
+    for (const parent of catTree) {
+      if (parent.children.some(c => c.id === categoryId)) {
+        setExpandedParent(parent.id)
+        return
+      }
+    }
+  }, [catTree, categoryId, isEdit])
 
   const filteredTree = catTree.filter(c => c.type === (type === 'transfer' ? 'expense' : type))
 
@@ -72,7 +121,7 @@ export default function AddPage() {
       const reimAmt = reimEnabled
         ? (reimbursableAmount ? parseFloat(reimbursableAmount) : amt)
         : 0
-      await transactionApi.create({
+      const payload = {
         amount: amt,
         type,
         description: note,   // 备注内容作为显示标题
@@ -81,13 +130,15 @@ export default function AddPage() {
         account_id: accountId,
         to_account_id: type === 'transfer' ? toAccountId : null,
         member_id: memberId,
-        note: '',
-        source: 'manual',
         tag_ids: selectedTagIds,
         is_reimbursable: reimEnabled,
         reimbursable_amount: reimAmt,
-        reimbursement_status: reimEnabled ? 'pending' : 'none',
-      })
+      }
+      if (isEdit && editId) {
+        await transactionApi.update(Number(editId), payload)
+      } else {
+        await transactionApi.create({ ...payload, source: 'manual', reimbursement_status: reimEnabled ? 'pending' : 'none' })
+      }
       navigate('/')
     } finally {
       setSubmitting(false)
@@ -111,11 +162,23 @@ export default function AddPage() {
     {}
   )
 
+  if (loading) {
+    return (
+      <div className="form-page">
+        <div className="page-header">
+          <button className="back-btn" onClick={() => navigate('/')}>←</button>
+          编辑账单
+        </div>
+        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>加载中...</div>
+      </div>
+    )
+  }
+
   return (
     <div className="form-page">
       <div className="page-header">
         <button className="back-btn" onClick={() => navigate('/')}>←</button>
-        记一笔
+        {isEdit ? '编辑账单' : '记一笔'}
       </div>
 
       <div className="type-toggle">
@@ -307,7 +370,7 @@ export default function AddPage() {
       </div>
 
       <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
-        {submitting ? '保存中...' : '保存'}
+        {submitting ? '保存中...' : (isEdit ? '保存修改' : '保存')}
       </button>
     </div>
   )

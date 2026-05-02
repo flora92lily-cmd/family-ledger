@@ -55,26 +55,32 @@ backend/
     schemas.py             # Pydantic v2 request/response models（含 TagCategoryOut/TagOut/TagBrief）
                            #   ⚠️ 字段名与类型名同名冲突：用 `from datetime import date as Date` alias 规避
                            #      例：ReimbursementItemOut.date 字段 type 写 Optional[Date] 而非 Optional[date]
-    seed.py                # Default categories + TagCategory"家庭成员"（初始 Tag: 我、老公）
+    seed.py                # 默认分类（两层树：14 个支出父类 + 6 个收入父类，按用户自定义结构）
+                           #   父分类 keywords 留空；子分类带关键词，仅服务支付宝/微信/PDF/通用 CSV
+                           #   钱迹按分类名直接匹配，不依赖关键词
+                           #   兜底：其他支出（顶层叶子）/ 其他收入（"退款报销"子分类）
     price_service.py       # Fund prices (eastmoney f10/lsjz), A-share prices (Tencent qt.gtimg.cn)
     routers/
       tags.py              # /api/tags/categories CRUD + /api/tags/ CRUD + /archive /unarchive /move /delete
       categories.py        # /api/categories/ flat + /tree endpoint, supports parent_id
-      transactions.py      # /api/transactions/ CRUD + /summary/monthly, /summary/category（支持 tag_id 筛选）
+      transactions.py      # /api/transactions/ list + GET/{id}（编辑页用）+ POST + PATCH + DELETE
+                           #   /summary/monthly, /summary/category（支持 tag_id 筛选）
       accounts.py          # /api/accounts/ CRUD, current_balance computed from linked transactions + holdings
       holdings.py          # /api/holdings/ CRUD + /refresh, /refresh-all, /summary
       imports.py           # /api/imports/parse (file upload), /save (batch insert, save 时才创建新标签)
                            #   save 同时接收 reimbursements 列表，按 external_id 跨批次关联原账单
       reimbursements.py    # /api/reimbursements/ CRUD：pending list / create / delete(revoke)
     parsers/
-      base.py              # ParsedTransaction dataclass (incl. payment_method, tags: list[str]), BaseParser ABC
+      base.py              # ParsedTransaction dataclass（含 payment_method/tags/source_category_name/
+                           #   source_parent_category_name），BaseParser ABC。Transaction 已无 note 字段
       alipay.py            # Alipay CSV (GBK encoding), extracts 收/付款方式
       wechat.py            # WeChat xlsx (openpyxl, header at row 16), extracts 支付方式
       bank_pdf.py          # CMB bank PDF (pdfplumber word-level coordinate extraction)
-      qianji.py            # Qianji app CSV (UTF-8 BOM)；备注→note，标签→tags list
+      qianji.py            # Qianji app CSV (UTF-8 BOM)；description=备注列（首页直接显示），
+                           #   分类名走 source_category_name/source_parent_category_name 由 categorizer 直接按名匹配
                            #   类型=报销 → expense+is_reimbursable；类型=报销记录 → ParsedReimbursement
       generic_csv.py       # Fallback CSV parser
-      categorizer.py       # Keyword matching against Category.keywords field
+      categorizer.py       # 优先级：source_category_name 直接按名匹配 → Category.keywords 关键词 → 兜底其他支出/收入
 ```
 
 ### Frontend structure
@@ -84,8 +90,11 @@ frontend/src/
                            #   含 TagCategory / Tag / TagBrief；tagApi 完整 CRUD
   App.tsx                  # React Router routes + TabBar (5 tabs: 首页/统计/+/投资/设置)
   pages/
-    HomePage.tsx           # Monthly summary + transaction list + detail bottom sheet（显示标签）
-    AddPage.tsx            # Manual transaction entry: 备注→description，无独立描述字段，标签多选
+    HomePage.tsx           # Monthly summary + transaction list + detail bottom sheet
+                           #   列表：左 icon | 中（分类名 / 备注·成员）| 右（金额 / 账户）
+                           #   详情页底部三个按钮：关闭 / 编辑（跳 /add?id=） / 删除
+    AddPage.tsx            # 记账 + 编辑（同一页面，?id= 参数进入编辑模式，加载交易→预填→PATCH）
+                           #   备注→description，无独立 note 字段，标签多选
     StatsPage.tsx          # Category breakdown + monthly trend table
     InvestPage.tsx         # Investment holdings, price refresh, add/edit modal（持仓支持标签）
     SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（账户支持标签）+ 分类管理
@@ -121,8 +130,8 @@ frontend/src/
 - **Categories are hierarchical**: `parent_id` enables two-level nesting. `/api/categories/tree` returns tree structure; flat `/api/categories/` used for dropdowns.
 - **Transaction types**: `expense` / `income` / `transfer`. Transfer records both `account_id` (from) and `to_account_id` (to).
 - **Account balance**: `Account.balance` is the user-set initial balance. `AccountOut.current_balance` is dynamically computed: `initial_balance ± transactions + 绑定持仓市值（投资理财账户）`.
-- **AddPage 记账**：只有一个"备注（可选）"输入，映射到 `description` 字段（用于列表显示），`note` 字段留给导入账单。
-- **Smart categorization**: `Category.keywords` field (comma-separated) matched against transaction description + counterparty. Falls back to "其他支出"/"其他收入".
+- **AddPage 记账/编辑**：只有一个"备注（可选）"输入，映射到 `description` 字段（用于列表显示）。**Transaction.note 字段已删除**，所有账单备注统一存 `description`（手动 + 导入）。Account/Holding/ReimbursementRecord 的 `note` 字段保留（设置页/投资页/报销页仍在用）。
+- **Smart categorization**：分三级优先：(1) ParsedTransaction 的 `source_category_name` / `source_parent_category_name` 在 Category 表里按 type+name 直接查（钱迹走这条）；(2) `Category.keywords` 关键词匹配 description + counterparty；(3) 兜底"其他支出"/"其他收入"。导入时如果 ParsedTransaction.category_id 已被解析阶段设过，categorizer 不会覆盖。
 - **DB migration**: `database.py:init_db()` 分三步：① `Base.metadata.create_all`（新表）→ ② `CREATE TABLE IF NOT EXISTS` 显式兜底（防止旧 DB 漏建新表，目前含 `reimbursement_records` / `reimbursement_items`）→ ③ `ALTER TABLE ADD COLUMN` + try/except 增量加列。`_migrate_members_to_tags()` 将旧 FamilyMember 数据迁移到 TagCategory/Tag（幂等，tag_categories 表非空时跳过）。
 - **Price service**: Synchronous HTTP calls wrapped in `asyncio.run_in_executor`. Fund: eastmoney f10/lsjz；Stock: Tencent qt.gtimg.cn（600xxx→sh, 000xxx/300xxx→sz）。
 - **Async relationship loading**: READ 时用 `selectinload()`；WRITE 时直接操作关联表（见上方标签系统说明）。
@@ -145,7 +154,7 @@ frontend/src/
 - ReimbursementRecord → Account (FK via to_account_id，到账账户)
 - Tag → TagCategory (FK)
 - Category → Category (self-referential via parent_id, no ORM relationship — tree built in router)
-- FamilyMember 表保留但不再暴露 API，member_id FK 字段保留作迁移痕迹
+- **FamilyMember 已恢复为一等模型**：`/api/members/` CRUD 可用；Transaction/Account/Holding 通过 `member_id` 直接关联（不走标签系统）；HomePage 列表显示家庭成员就读 `txn.member`。`database.py:_migrate_members_to_tags()` 仅作历史调试用，已不再调用
 
 ## 部署前提（影响设计决策）
 
@@ -159,6 +168,14 @@ frontend/src/
 ## Pending Requirements (需求池)
 
 ### 已完成
+
+- ~~**分类体系重置 + Transaction.note 删除 + 编辑功能 + 列表布局调整**~~ —
+  (1) [seed.py](backend/app/seed.py) 重写：14 支出父类 + 6 收入父类（按用户自定义结构，去前缀去待定），父类无关键词，子类带关键词；顶层 "其他支出" 兜底，"退款报销→其他收入" 作为收入兜底；
+  (2) Transaction.note 从 model/schemas/api.ts/解析器/导入路由全部删除，备注统一走 description；
+  (3) 钱迹解析器：description=备注列；新增 `source_category_name`/`source_parent_category_name` 字段；categorizer 优先级：source_category_name → 关键词 → 兜底；
+  (4) HomePage 列表布局：左 icon | 中（分类名 / 备注·成员）| 右（金额 / 账户）；详情移除 source 行；新增「编辑」按钮跳 `/add?id=`；
+  (5) AddPage 接受 `?id=` 进入编辑模式，加载交易→预填→PATCH；新增 `GET /api/transactions/{id}` 端点；
+  (6) 数据库已删除（用户确认无业务数据），下次启动后端时按新 seed 重建
 
 - ~~**需求7：多级标签系统**~~ — TagCategory/Tag/关联表；旧FamilyMember自动迁移；记账/导入/账户/持仓/设置全部接入；钱迹标签parse时原样返回、save时才落库；批量标签虚拟叠加模式；归档/移动/删除；统计接口预留tag_id筛选口
 - ~~**需求4：资产账户体系**~~ — Account 模型（资金账户/信用卡/充值账户/债务/投资理财）、CRUD API、设置页管理UI、动态余额计算

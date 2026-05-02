@@ -12,7 +12,12 @@
               账户1=到账账户，关联账单=原报销支出的 ID
   - 还款/转账 → 跳过（转账在其他路径处理）
 - 已报销列：值为"是" 表示该可报销支出已被报销；空表示待报销
-- 标签：可作为家庭成员标识（前端可选用）
+- 标签：作为家庭成员/项目等多维度标识
+
+分类匹配策略：
+- description = 备注列（备注空则空白；不再用分类名兜底，避免列表显示分类名）
+- source_category_name = 钱迹二级分类（categorizer 优先按名直接匹配）
+- source_parent_category_name = 钱迹一级分类（次选 fallback）
 """
 import csv
 from datetime import datetime
@@ -108,6 +113,7 @@ class QianjiParser(BaseParser):
         row_id = safe("id")
         linked_id = safe("linked")
         payment_method = safe("account")
+        note_text = safe("note")  # 钱迹"备注"列
 
         # 分支 1：报销记录 → ParsedReimbursement
         if type_str == "报销记录":
@@ -115,7 +121,7 @@ class QianjiParser(BaseParser):
                 amount=amount,
                 date=txn_date,
                 payment_method=payment_method,
-                note=safe("note"),
+                note=note_text,
                 external_id=row_id,
                 linked_external_id=linked_id,
                 raw=",".join(row)[:200],
@@ -135,12 +141,11 @@ class QianjiParser(BaseParser):
             # 还款 / 转账 跳过
             return None
 
-        # 描述：二级分类 or 主分类
-        sub = safe("subcategory")
-        category = safe("category")
-        description = sub or category
-
-        note = safe("note")
+        # description = 备注（首页列表显示这一字段）
+        # 分类名通过 source_category_name / source_parent_category_name 传给 categorizer
+        sub_cat = safe("subcategory")
+        parent_cat = safe("category")
+        description = note_text  # 备注为空就显示空白
 
         # 标签
         tag_str = safe("tag")
@@ -160,9 +165,10 @@ class QianjiParser(BaseParser):
             date=txn_date,
             description=description,
             counterparty="",
-            note=note,
             payment_method=payment_method,
             tags=tags,
+            source_category_name=sub_cat or None,
+            source_parent_category_name=parent_cat or None,
             is_reimbursable=is_reimbursable,
             reimbursable_amount=reimbursable_amount,
             reimbursement_status=reimbursement_status,

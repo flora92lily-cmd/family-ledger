@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  categoryApi, accountApi, tagApi, memberApi,
-  type Category, type CategoryTree, type Account, type AccountCategory,
+  accountApi, tagApi, memberApi,
+  type Account, type AccountCategory,
   type Tag, type TagCategory, type FamilyMember,
 } from '../api'
 
-const COMMON_ICONS = ['📦', '🍜', '🚗', '🛒', '🏠', '🏥', '📚', '🎮', '📱', '👔', '🎁', '💰', '💵', '🏆', '📈', '🧧', '💎', '✈️', '🐾', '🍺', '⚽', '💄', '🔧', '🏷️']
 const TAG_ICONS = ['🏷️', '👩', '👨', '👧', '👦', '👴', '👵', '✈️', '🏖️', '🎉', '💼', '🏠', '🎓', '🎮', '🌟', '❤️', '🔖', '📌', '🎯', '🗂️']
 const ACCOUNT_ICONS = ['🏦', '💳', '💰', '📱', '🏧', '🎫', '🚌', '🍽️', '🏠', '🚗', '📋', '💼', '🧧', '💵']
 const MEMBER_ICONS = ['👤', '👨', '👩', '👧', '👦', '👴', '👵', '🧒', '👶', '🏠', '👨‍👩‍👧', '👨‍👩‍👦', '👫', '👬', '👭', '🐶', '🐱']
@@ -20,7 +19,6 @@ const ACCOUNT_CATEGORY_ICONS: Record<AccountCategory, string> = {
   '投资理财': '📈',
 }
 
-const EMPTY_CAT_FORM = { name: '', icon: '📦', type: 'expense' as 'expense' | 'income', keywords: '', parent_id: null as number | null, sort_order: 0 }
 const EMPTY_ACCOUNT_FORM = { name: '', icon: '🏦', category: '资金账户' as AccountCategory, balance: 0, member_id: null as number | null, note: '', sort_order: 0, tag_ids: [] as number[] }
 const EMPTY_MEMBER_FORM = { name: '', avatar: '👤', sort_order: 0 }
 
@@ -32,14 +30,6 @@ const inputStyle: React.CSSProperties = {
 
 export default function SettingsPage() {
   const navigate = useNavigate()
-
-  // ─── 分类 ──────────────────────────────────────────────────────
-  const [catTree, setCatTree] = useState<CategoryTree[]>([])
-  const [allCats, setAllCats] = useState<Category[]>([])
-  const [catTab, setCatTab] = useState<'expense' | 'income'>('expense')
-  const [showCatModal, setShowCatModal] = useState(false)
-  const [editCatId, setEditCatId] = useState<number | null>(null)
-  const [catForm, setCatForm] = useState({ ...EMPTY_CAT_FORM })
 
   // ─── 账户 ──────────────────────────────────────────────────────
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -75,12 +65,6 @@ export default function SettingsPage() {
   const [moveToCatId, setMoveToCatId] = useState<number>(0)
 
   // ─── Load ───────────────────────────────────────────────────────
-  const loadCategories = async () => {
-    const [tree, flat] = await Promise.all([categoryApi.tree(), categoryApi.list()])
-    setCatTree(tree.data)
-    setAllCats(flat.data)
-  }
-
   const loadAccounts = async () => {
     const r = await accountApi.list()
     setAccounts(r.data)
@@ -103,42 +87,10 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
-    loadCategories()
     loadAccounts()
     loadTags()
     loadMembers()
   }, [])
-
-  // ─── 分类操作 ─────────────────────────────────────────────────
-  const openAddCat = (type: 'expense' | 'income', parent_id: number | null = null) => {
-    setEditCatId(null)
-    setCatForm({ ...EMPTY_CAT_FORM, type, parent_id })
-    setShowCatModal(true)
-  }
-
-  const openEditCat = (c: Category) => {
-    setEditCatId(c.id)
-    setCatForm({ name: c.name, icon: c.icon, type: c.type as 'expense' | 'income', keywords: c.keywords, parent_id: c.parent_id, sort_order: c.sort_order })
-    setShowCatModal(true)
-  }
-
-  const saveCat = async () => {
-    if (!catForm.name.trim()) return alert('请输入分类名称')
-    if (editCatId !== null) {
-      await categoryApi.update(editCatId, catForm)
-    } else {
-      await categoryApi.create(catForm)
-    }
-    setShowCatModal(false)
-    loadCategories()
-  }
-
-  const deleteCat = async (c: Category) => {
-    const label = c.parent_id ? `子分类「${c.name}」` : `分类「${c.name}」（下属子分类将移至一级）`
-    if (!confirm(`确认删除${label}？`)) return
-    await categoryApi.delete(c.id)
-    loadCategories()
-  }
 
   // ─── 账户操作 ─────────────────────────────────────────────────
   const openAddAccount = () => {
@@ -310,9 +262,6 @@ export default function SettingsPage() {
   }
 
   // ─── 派生数据 ──────────────────────────────────────────────────
-  const filteredTree = catTree.filter(c => c.type === catTab)
-  const parentOptions = allCats.filter(c => c.type === catForm.type && c.parent_id === null && c.id !== editCatId)
-
   // 未归档标签按分类分组
   const activeTagsByCategory = tagCategories.map(cat => ({
     ...cat,
@@ -341,6 +290,17 @@ export default function SettingsPage() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 600 }}>报销管理</div>
           <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>处理待报销账单 · 查看报销记录</div>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: 20 }}>›</div>
+      </div>
+
+      {/* 分类管理 */}
+      <div className="card" onClick={() => navigate('/categories')}
+        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+        <div style={{ fontSize: 28, marginRight: 12 }}>🗂️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>分类管理</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>支出 · 收入分类及关键词设置</div>
         </div>
         <div style={{ color: '#9ca3af', fontSize: 20 }}>›</div>
       </div>
@@ -498,98 +458,6 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
-
-      {/* 分类管理 */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>分类管理</div>
-          <button onClick={() => openAddCat(catTab)}
-            style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--primary)' }}>+</button>
-        </div>
-
-        <div className="type-toggle" style={{ marginBottom: 12 }}>
-          <button className={catTab === 'expense' ? 'active' : ''} onClick={() => setCatTab('expense')}>支出</button>
-          <button className={catTab === 'income' ? 'active' : ''} onClick={() => setCatTab('income')}>收入</button>
-        </div>
-
-        {filteredTree.map(parent => (
-          <div key={parent.id} style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #e5e7eb' }}>
-              <span style={{ fontSize: 20, marginRight: 8 }}>{parent.icon}</span>
-              <span style={{ fontSize: 15, fontWeight: 600, flex: 1 }}>{parent.name}</span>
-              <button onClick={() => openAddCat(catTab, parent.id)}
-                style={{ background: 'none', border: 'none', fontSize: 13, color: '#3b82f6', cursor: 'pointer', marginRight: 8 }}>+子分类</button>
-              <button onClick={() => openEditCat(parent)}
-                style={{ background: 'none', border: 'none', fontSize: 13, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
-              <button onClick={() => deleteCat(parent)}
-                style={{ background: 'none', border: 'none', fontSize: 13, color: '#ef4444', cursor: 'pointer' }}>删除</button>
-            </div>
-            {parent.children.map(child => (
-              <div key={child.id} style={{ display: 'flex', alignItems: 'center', padding: '5px 0 5px 28px' }}>
-                <span style={{ fontSize: 16, marginRight: 8 }}>{child.icon}</span>
-                <span style={{ fontSize: 13, flex: 1, color: '#374151' }}>{child.name}</span>
-                <button onClick={() => openEditCat(child)}
-                  style={{ background: 'none', border: 'none', fontSize: 12, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
-                <button onClick={() => deleteCat(child)}
-                  style={{ background: 'none', border: 'none', fontSize: 12, color: '#ef4444', cursor: 'pointer' }}>删除</button>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-
-      {/* ─── 分类编辑弹窗 ─── */}
-      {showCatModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-end' }}>
-          <div style={{ width: '100%', background: 'white', borderRadius: '20px 20px 0 0', padding: 20, maxHeight: '85vh', overflowY: 'auto' }}>
-            <div style={{ fontWeight: 600, fontSize: 17, marginBottom: 16, textAlign: 'center' }}>
-              {editCatId !== null ? '编辑分类' : '新建分类'}
-            </div>
-
-            {editCatId === null && catForm.parent_id === null && (
-              <>
-                <label style={labelStyle}>类型</label>
-                <div className="type-toggle" style={{ marginBottom: 14 }}>
-                  <button className={catForm.type === 'expense' ? 'active' : ''} onClick={() => setCatForm(f => ({ ...f, type: 'expense' }))}>支出</button>
-                  <button className={catForm.type === 'income' ? 'active' : ''} onClick={() => setCatForm(f => ({ ...f, type: 'income' }))}>收入</button>
-                </div>
-              </>
-            )}
-
-            <label style={labelStyle}>所属一级分类（为空则为一级分类）</label>
-            <select
-              value={catForm.parent_id ?? ''}
-              onChange={e => setCatForm(f => ({ ...f, parent_id: e.target.value ? parseInt(e.target.value) : null }))}
-              style={{ width: '100%', padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 14, marginBottom: 14 }}>
-              <option value="">无（一级分类）</option>
-              {parentOptions.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
-            </select>
-
-            <label style={labelStyle}>名称 *</label>
-            <input style={inputStyle} placeholder="分类名称"
-              value={catForm.name} onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))} />
-
-            <label style={labelStyle}>图标</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-              {COMMON_ICONS.map(ico => (
-                <button key={ico} onClick={() => setCatForm(f => ({ ...f, icon: ico }))}
-                  style={{ width: 36, height: 36, fontSize: 20, cursor: 'pointer', borderRadius: 8, border: catForm.icon === ico ? '2px solid #3b82f6' : '1px solid #e5e7eb', background: catForm.icon === ico ? '#eff6ff' : 'white' }}>{ico}</button>
-              ))}
-            </div>
-
-            <label style={labelStyle}>关键词（逗号分隔，用于智能分类）</label>
-            <input style={inputStyle} placeholder="如：咖啡,下午茶,奶茶"
-              value={catForm.keywords} onChange={e => setCatForm(f => ({ ...f, keywords: e.target.value }))} />
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-              <button onClick={() => setShowCatModal(false)}
-                style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>取消</button>
-              <button onClick={saveCat}
-                style={{ flex: 1, padding: 12, borderRadius: 10, border: 'none', background: '#3b82f6', color: 'white', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>保存</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ─── 账户编辑弹窗 ─── */}
       {showAccountModal && (

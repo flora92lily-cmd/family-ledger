@@ -66,6 +66,26 @@ async def list_transactions(
     return result.scalars().all()
 
 
+@router.get("/{txn_id}", response_model=TransactionOut)
+async def get_transaction(txn_id: int, db: AsyncSession = Depends(get_db)):
+    """获取单条交易详情（用于编辑页加载）"""
+    result = await db.execute(
+        select(Transaction)
+        .options(
+            selectinload(Transaction.category),
+            selectinload(Transaction.account),
+            selectinload(Transaction.to_account),
+            selectinload(Transaction.member),
+            selectinload(Transaction.tags),
+        )
+        .where(Transaction.id == txn_id)
+    )
+    txn = result.scalar_one_or_none()
+    if not txn:
+        raise HTTPException(status_code=404, detail="交易不存在")
+    return txn
+
+
 @router.post("/", response_model=TransactionOut)
 async def create_transaction(data: TransactionCreate, db: AsyncSession = Depends(get_db)):
     payload = data.model_dump(exclude={"tag_ids"})

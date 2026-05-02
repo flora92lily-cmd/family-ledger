@@ -136,7 +136,6 @@ class TransactionCreate(BaseModel):
     account_id: Optional[int] = None
     to_account_id: Optional[int] = None
     member_id: Optional[int] = None
-    note: str = ""
     tag_ids: list[int] = []
     # 报销相关（创建/更新时可选传入）
     is_reimbursable: bool = False
@@ -155,7 +154,6 @@ class TransactionUpdate(BaseModel):
     account_id: Optional[int] = None
     to_account_id: Optional[int] = None
     member_id: Optional[int] = None
-    note: Optional[str] = None
     tag_ids: Optional[list[int]] = None
     is_reimbursable: Optional[bool] = None
     reimbursable_amount: Optional[float] = None
@@ -172,7 +170,6 @@ class TransactionOut(BaseModel):
     account_id: Optional[int]
     to_account_id: Optional[int]
     member_id: Optional[int] = None
-    note: str
     is_reimbursable: bool = False
     reimbursable_amount: float = 0
     reimbursement_status: str = "none"

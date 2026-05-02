@@ -309,7 +309,6 @@ export default function ImportPage() {
         date: t.date,
         description: t.description,
         counterparty: t.counterparty,
-        note: t.note,
         category_id: t.category_id,
         account_id: t.account_id ?? null,
         to_account_id: t.to_account_id ?? null,

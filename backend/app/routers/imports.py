@@ -32,7 +32,6 @@ class ParsedTxnOut(BaseModel):
     date: date
     description: str
     counterparty: str
-    note: str
     category_id: Optional[int]
     category_name: Optional[str]
     payment_method: str
@@ -68,7 +67,6 @@ class ImportTxnIn(BaseModel):
     date: date
     description: str = ""
     counterparty: str = ""
-    note: str = ""
     category_id: Optional[int] = None
     account_id: Optional[int] = None
     to_account_id: Optional[int] = None
@@ -258,7 +256,6 @@ async def parse_bill(
             date=t.date,
             description=t.description,
             counterparty=t.counterparty,
-            note=t.note,
             category_id=t.category_id,
             category_name=t.category_name,
             payment_method=t.payment_method,
@@ -336,7 +333,6 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
             account_id=t.account_id,
             to_account_id=t.to_account_id,
             member_id=t.member_id,
-            note=t.note,
             is_reimbursable=t.is_reimbursable,
             reimbursable_amount=reimbursable_amount,
             reimbursement_status=reimbursement_status,

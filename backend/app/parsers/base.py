@@ -12,7 +12,6 @@ class ParsedTransaction:
     date: date
     description: str = ""
     counterparty: str = ""
-    note: str = ""
     payment_method: str = ""  # 支付方式（如"招商银行储蓄卡(1234)"、"余额宝"、"花呗"）
     raw: str = ""  # 原始行内容，便于调试
     tags: list = field(default_factory=list)  # 原始标签字符串列表（如钱迹的标签列）
@@ -20,6 +19,10 @@ class ParsedTransaction:
     # 自动归类的结果（前端可改）
     category_id: Optional[int] = None
     category_name: Optional[str] = None  # 仅用于展示
+
+    # 来源账单自带的分类名（如钱迹的二级分类/一级分类），categorizer 会优先按名直接匹配
+    source_category_name: Optional[str] = None         # 优先（如钱迹的二级分类）
+    source_parent_category_name: Optional[str] = None  # 备选（如钱迹的一级分类）
 
     # 报销相关（钱迹导入时填充）
     is_reimbursable: bool = False               # 类型=报销 → True

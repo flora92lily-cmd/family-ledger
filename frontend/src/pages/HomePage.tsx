@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { transactionApi, reimbursementApi, type Transaction, type MonthlySummary, type ReimbursementRecord } from '../api'
 
 export default function HomePage() {
+  const navigate = useNavigate()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [summary, setSummary] = useState<MonthlySummary | null>(null)
   const [selected, setSelected] = useState<Transaction | null>(null)
@@ -45,6 +47,11 @@ export default function HomePage() {
     load()
   }
 
+  const handleEdit = (txn: Transaction) => {
+    setSelected(null)
+    navigate(`/add?id=${txn.id}`)
+  }
+
   // Group transactions by date
   const grouped = transactions.reduce<Record<string, Transaction[]>>((acc, txn) => {
     const d = txn.date
@@ -55,27 +62,32 @@ export default function HomePage() {
 
   const dayName = (d: string) => ['周日','周一','周二','周三','周四','周五','周六'][dayjs(d).day()]
 
+  // 列表行 icon：转账固定 🔄，其他用分类 icon 兜底💰
   const txnIcon = (txn: Transaction) =>
     txn.type === 'transfer' ? '🔄' : txn.category?.icon || '💰'
 
-  const txnDesc = (txn: Transaction) => {
+  // 列表第一行：分类名（转账特殊处理）
+  const txnTitle = (txn: Transaction) => {
     if (txn.type === 'transfer') return txn.description || '转账'
-    return txn.description || txn.counterparty || txn.category?.name || '未分类'
+    return txn.category?.name || '未分类'
   }
 
-  const txnMeta = (txn: Transaction) => {
+  // 列表第二行：备注（如有） + 家庭成员
+  const txnSubMeta = (txn: Transaction) => {
     const parts: string[] = []
+    if (txn.description) parts.push(txn.description)
+    if (txn.member) parts.push(`${txn.member.avatar}${txn.member.name}`)
+    return parts.join(' · ')
+  }
+
+  // 右侧第二行：账户（转账显示 from→to）
+  const txnAccountStr = (txn: Transaction) => {
     if (txn.type === 'transfer') {
       const from = txn.account ? `${txn.account.icon}${txn.account.name}` : '?'
       const to = txn.to_account ? `${txn.to_account.icon}${txn.to_account.name}` : '?'
-      parts.push(`${from} → ${to}`)
-    } else {
-      if (txn.account) parts.push(`${txn.account.icon}${txn.account.name}`)
+      return `${from}→${to}`
     }
-    if (txn.member) parts.push(`${txn.member.avatar}${txn.member.name}`)
-    if (txn.tags.length > 0) parts.push(txn.tags.map(t => `${t.icon}${t.name}`).join(' '))
-    if (txn.source !== 'manual') parts.push(txn.source)
-    return parts.join(' · ')
+    return txn.account ? `${txn.account.icon}${txn.account.name}` : ''
   }
 
   const txnAmountStr = (txn: Transaction) => {
@@ -129,30 +141,41 @@ export default function HomePage() {
               <div className="date-header">
                 {dayjs(date).format('MM月DD日')} {dayName(date)}
               </div>
-              {txns.map(txn => (
-                <div key={txn.id} className="txn-item" onClick={() => setSelected(txn)}>
-                  <div className="icon">{txnIcon(txn)}</div>
-                  <div className="info">
-                    <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span>{txnDesc(txn)}</span>
-                      {txn.is_reimbursable && txn.reimbursement_status === 'pending' && (
-                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#fef3c7', color: '#b45309', fontWeight: 500 }}>
-                          待报销
-                        </span>
-                      )}
-                      {txn.is_reimbursable && txn.reimbursement_status === 'done' && (
-                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#dcfce7', color: '#15803d', fontWeight: 500 }}>
-                          已报销
-                        </span>
+              {txns.map(txn => {
+                const subMeta = txnSubMeta(txn)
+                const accountStr = txnAccountStr(txn)
+                return (
+                  <div key={txn.id} className="txn-item" onClick={() => setSelected(txn)}>
+                    <div className="icon">{txnIcon(txn)}</div>
+                    <div className="info">
+                      <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>{txnTitle(txn)}</span>
+                        {txn.is_reimbursable && txn.reimbursement_status === 'pending' && (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#fef3c7', color: '#b45309', fontWeight: 500 }}>
+                            待报销
+                          </span>
+                        )}
+                        {txn.is_reimbursable && txn.reimbursement_status === 'done' && (
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#dcfce7', color: '#15803d', fontWeight: 500 }}>
+                            已报销
+                          </span>
+                        )}
+                      </div>
+                      {subMeta && <div className="meta">{subMeta}</div>}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', minWidth: 0 }}>
+                      <div className="amount" style={{ color: txnAmountColor(txn) }}>
+                        {txnAmountStr(txn)}
+                      </div>
+                      {accountStr && (
+                        <div className="meta" style={{ marginTop: 2, fontSize: 11, color: '#9ca3af', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {accountStr}
+                        </div>
                       )}
                     </div>
-                    <div className="meta">{txnMeta(txn)}</div>
                   </div>
-                  <div className="amount" style={{ color: txnAmountColor(txn) }}>
-                    {txnAmountStr(txn)}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ))
         )}
@@ -166,7 +189,7 @@ export default function HomePage() {
             onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <span style={{ fontSize: 18, fontWeight: 600 }}>
-                {txnIcon(selected)} {txnDesc(selected)}
+                {txnIcon(selected)} {txnTitle(selected)}
               </span>
               <span style={{ fontSize: 20, fontWeight: 700, color: txnAmountColor(selected) }}>
                 {txnAmountStr(selected)}
@@ -193,7 +216,7 @@ export default function HomePage() {
                 <div>标签：{selected.tags.map(t => `${t.icon} ${t.name}`).join('、')}</div>
               )}
               {selected.counterparty && <div>对方：{selected.counterparty}</div>}
-              {selected.note && <div>备注：{selected.note}</div>}
+              {selected.description && <div>备注：{selected.description}</div>}
               <div>来源：{selected.source === 'manual' ? '手动记账' : selected.source}</div>
 
               {/* 报销信息 */}
@@ -225,6 +248,10 @@ export default function HomePage() {
               <button onClick={() => setSelected(null)}
                 style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
                 关闭
+              </button>
+              <button onClick={() => handleEdit(selected)}
+                style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+                编辑
               </button>
               <button onClick={() => handleDelete(selected)}
                 style={{ flex: 1, padding: 12, borderRadius: 10, border: 'none', background: '#ef4444', color: 'white', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
