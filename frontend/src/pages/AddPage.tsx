@@ -140,6 +140,9 @@ export default function AddPage() {
         await transactionApi.create({ ...payload, source: 'manual', reimbursement_status: reimEnabled ? 'pending' : 'none' })
       }
       navigate('/')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      alert('保存失败：' + (err.response?.data?.detail || '请检查网络连接'))
     } finally {
       setSubmitting(false)
     }

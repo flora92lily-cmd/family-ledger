@@ -273,6 +273,7 @@ export const categoryApi = {
   update: (id: number, data: { name: string; icon: string; type: string; keywords: string; parent_id?: number | null; sort_order?: number }) =>
     api.put<Category>(`/api/categories/${id}`, data),
   delete: (id: number) => api.delete(`/api/categories/${id}`),
+  reseed: () => api.post<{ ok: boolean; count: number }>('/api/categories/reseed'),
 }
 
 export const importApi = {

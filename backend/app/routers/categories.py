@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete
 from app.database import get_db
 from app.models import Category
 from app.schemas import CategoryCreate, CategoryOut, CategoryTree
+from app.seed import seed_defaults
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
 
@@ -65,6 +66,18 @@ async def update_category(cat_id: int, data: CategoryCreate, db: AsyncSession = 
     await db.commit()
     await db.refresh(cat)
     return cat
+
+
+@router.post("/reseed", response_model=dict)
+async def reseed_categories(db: AsyncSession = Depends(get_db)):
+    """清空所有分类并重新按默认结构初始化（用于版本升级后重置分类树）。
+    注意：已关联到账单的 category_id 会变为 NULL，需手动重新归类。"""
+    await db.execute(sa_delete(Category))
+    await db.commit()
+    await seed_defaults(db)
+    result = await db.execute(select(Category))
+    count = len(result.scalars().all())
+    return {"ok": True, "count": count}
 
 
 @router.delete("/{cat_id}")

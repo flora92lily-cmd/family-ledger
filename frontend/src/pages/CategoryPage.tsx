@@ -159,6 +159,28 @@ export default function CategoryPage() {
             </div>
           ))
         )}
+
+        {/* 重置为默认分类 */}
+        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+          <button
+            onClick={async () => {
+              if (!confirm('确认重置所有分类？\n\n这将清空现有全部分类，并重新生成默认的 14 个支出分类 + 6 个收入分类。\n\n已关联到账单的分类会变为空，需要重新手动归类。')) return
+              try {
+                const r = await categoryApi.reseed()
+                alert(`✅ 重置成功，共生成 ${r.data.count} 个分类`)
+                loadCategories()
+              } catch {
+                alert('重置失败，请重试')
+              }
+            }}
+            style={{
+              width: '100%', padding: '12px 0', borderRadius: 10,
+              border: '1px solid #fca5a5', background: '#fff5f5',
+              color: '#dc2626', fontSize: 14, cursor: 'pointer',
+            }}>
+            🔄 重置为默认分类（删除所有现有分类）
+          </button>
+        </div>
       </div>
 
       {/* 分类编辑弹窗 */}
