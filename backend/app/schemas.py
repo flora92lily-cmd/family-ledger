@@ -1,6 +1,6 @@
 from pydantic import BaseModel
-from datetime import date, datetime
-from datetime import date as Date   # alias 避免与字段名 `date` 冲突
+from datetime import datetime
+from datetime import date as Date   # ⚠️ 始终用 Date 别名，避免与字段名 `date` 同名导致 Pydantic v2 把类型当成字段值（None）
 from typing import Optional
 
 
@@ -130,7 +130,7 @@ class TransactionCreate(BaseModel):
     type: str  # "expense" / "income" / "transfer"
     description: str = ""
     counterparty: str = ""
-    date: date
+    date: Date
     source: str = "manual"
     category_id: Optional[int] = None
     account_id: Optional[int] = None
@@ -149,7 +149,7 @@ class TransactionUpdate(BaseModel):
     type: Optional[str] = None
     description: Optional[str] = None
     counterparty: Optional[str] = None
-    date: Optional[date] = None
+    date: Optional[Date] = None
     category_id: Optional[int] = None
     account_id: Optional[int] = None
     to_account_id: Optional[int] = None
@@ -164,7 +164,7 @@ class TransactionOut(BaseModel):
     type: str
     description: str
     counterparty: str
-    date: date
+    date: Date
     source: str
     category_id: Optional[int]
     account_id: Optional[int]
@@ -202,7 +202,7 @@ class ReimbursementItemOut(BaseModel):
     amount_paid: Optional[float] = None  # 原支出金额
 
 class ReimbursementRecordCreate(BaseModel):
-    date: date
+    date: Date
     to_account_id: int
     total_amount: float
     note: str = ""
@@ -210,7 +210,7 @@ class ReimbursementRecordCreate(BaseModel):
 
 class ReimbursementRecordOut(BaseModel):
     id: int
-    date: date
+    date: Date
     to_account_id: Optional[int]
     total_amount: float
     note: str

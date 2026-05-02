@@ -282,39 +282,55 @@ export default function AddPage() {
       {type !== 'transfer' && (
         <div className="form-group">
           <label>分类</label>
-          <div className="category-grid">
-            {filteredTree.map(cat => (
-              <div key={cat.id} className={`cat-item ${categoryId === cat.id ? 'selected' : ''}`}
-                onClick={() => handleCatClick(cat)} style={{ position: 'relative' }}>
-                <span className="cat-icon">{cat.icon}</span>
-                <span className="cat-name">{cat.name}</span>
-                {cat.children.length > 0 && (
-                  <span style={{ position: 'absolute', top: 2, right: 3, fontSize: 9, color: '#9ca3af' }}>
-                    {expandedParent === cat.id ? '▲' : '▼'}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-          {expandedParent !== null && (() => {
-            const parent = filteredTree.find(c => c.id === expandedParent)
-            if (!parent || parent.children.length === 0) return null
-            return (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 6, paddingLeft: 2 }}>
-                  {parent.icon} {parent.name} 的子分类
-                </div>
-                <div className="category-grid">
-                  {parent.children.map(child => (
-                    <div key={child.id} className={`cat-item ${categoryId === child.id ? 'selected' : ''}`}
-                      onClick={() => { setCategoryId(child.id) }}>
-                      <span className="cat-icon">{child.icon}</span>
-                      <span className="cat-name">{child.name}</span>
+          {(() => {
+            // 按 5 个一行切片（与 .category-grid 的 5 列布局对齐）；遇到展开的父分类就在该行下方插入子分类
+            const COLS = 5
+            const rows: CategoryTree[][] = []
+            for (let i = 0; i < filteredTree.length; i += COLS) {
+              rows.push(filteredTree.slice(i, i + COLS))
+            }
+            return rows.map((row, rowIdx) => {
+              const expandedInRow = expandedParent !== null
+                ? row.find(c => c.id === expandedParent)
+                : undefined
+              return (
+                <div key={rowIdx}>
+                  <div className="category-grid" style={rowIdx > 0 ? { marginTop: 8 } : undefined}>
+                    {row.map(cat => (
+                      <div key={cat.id} className={`cat-item ${categoryId === cat.id ? 'selected' : ''}`}
+                        onClick={() => handleCatClick(cat)} style={{ position: 'relative' }}>
+                        <span className="cat-icon">{cat.icon}</span>
+                        <span className="cat-name">{cat.name}</span>
+                        {cat.children.length > 0 && (
+                          <span style={{ position: 'absolute', top: 2, right: 3, fontSize: 9, color: '#9ca3af' }}>
+                            {expandedParent === cat.id ? '▲' : '▼'}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {expandedInRow && expandedInRow.children.length > 0 && (
+                    <div style={{
+                      marginTop: 6, padding: '10px 10px 8px',
+                      background: '#f9fafb', borderRadius: 8, border: '1px solid #f3f4f6',
+                    }}>
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 6, paddingLeft: 2 }}>
+                        {expandedInRow.icon} {expandedInRow.name} 的子分类
+                      </div>
+                      <div className="category-grid">
+                        {expandedInRow.children.map(child => (
+                          <div key={child.id} className={`cat-item ${categoryId === child.id ? 'selected' : ''}`}
+                            onClick={() => { setCategoryId(child.id) }}>
+                            <span className="cat-icon">{child.icon}</span>
+                            <span className="cat-name">{child.name}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
-            )
+              )
+            })
           })()}
         </div>
       )}
