@@ -108,11 +108,17 @@ class AlipayParser(BaseParser):
         else:
             return None
 
-        # 解析时间
+        # 解析时间（兼容 2026-04-27 与 2026/4/27 两种格式）
         time_str = safe_get("time")
-        try:
-            txn_date = datetime.strptime(time_str.split()[0], "%Y-%m-%d").date()
-        except (ValueError, IndexError):
+        date_part = time_str.split()[0] if time_str else ""
+        txn_date = None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+            try:
+                txn_date = datetime.strptime(date_part, fmt).date()
+                break
+            except ValueError:
+                continue
+        if txn_date is None:
             return None
 
         return ParsedTransaction(
