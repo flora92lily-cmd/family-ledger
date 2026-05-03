@@ -41,6 +41,14 @@ async def init_db():
                 amount REAL DEFAULT 0,
                 PRIMARY KEY (record_id, transaction_id)
             )""",
+            """CREATE TABLE IF NOT EXISTS payment_method_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source VARCHAR(20) NOT NULL,
+                raw_name VARCHAR(200) NOT NULL DEFAULT '',
+                account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source, raw_name)
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))

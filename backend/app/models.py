@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Text, Boolean, Table
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Text, Boolean, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -192,3 +192,19 @@ class Holding(Base):
     account = relationship("Account")
     member = relationship("FamilyMember", foreign_keys=[member_id])
     tags = relationship("Tag", secondary=holding_tags, lazy="select")
+
+
+# ─── 导入账单原始账户映射 ────────────────────────────────────────────────────────
+
+class PaymentMethodMapping(Base):
+    """记忆：导入账单时把 (source, raw_name) 映射到本应用账户。下次导入自动预填。"""
+    __tablename__ = "payment_method_mappings"
+    __table_args__ = (UniqueConstraint("source", "raw_name", name="uq_pmm_source_raw"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(20), nullable=False)        # alipay / wechat / bank_pdf / qianji / generic
+    raw_name = Column(String(200), nullable=False, default="")  # 原始账户名；bank_pdf 等无 payment_method 用 ""
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    last_used_at = Column(DateTime, server_default=func.now())
+
+    account = relationship("Account", foreign_keys=[account_id])

@@ -12,6 +12,7 @@ import {
   type Tag,
   type Account,
   type FamilyMember,
+  type AccountMappingItem,
 } from '../api'
 
 // 支付方式关键词 → 账户名关键词映射
@@ -62,7 +63,7 @@ const SOURCES = [
 
 export default function ImportPage() {
   const navigate = useNavigate()
-  const [step, setStep] = useState<'select' | 'preview'>('select')
+  const [step, setStep] = useState<'select' | 'mapping' | 'preview'>('select')
   const [source, setSource] = useState<string>('')
   const [parsing, setParsing] = useState(false)
   // 钱迹专属：日期范围过滤（一次性导出全部历史时，限制只导入指定区间）
@@ -85,6 +86,14 @@ export default function ImportPage() {
 
   // 批量标签：虚拟叠加到所有勾选账单，不写入各行 state，保存时才合并
   const [batchTagIds, setBatchTagIds] = useState<number[]>([])
+
+  // 原始账户映射：(payment_method 字符串 → account_id 或 null)。
+  // 解析后由后端 account_mappings 初始化，未命中映射的项用 autoMatchAccount 启发式补；
+  // 用户在 mapping step 改一项时同步所有该 payment_method 的交易；保存时整表 upsert。
+  const [accountMappings, setAccountMappings] = useState<Map<string, number | null>>(new Map())
+
+  // 后端返回时已经在 payment_method_mappings 表里记忆过的 raw_name 集合（用于在 mapping 页显示"已记忆"徽标）
+  const [rememberedRawNames, setRememberedRawNames] = useState<Set<string>>(new Set())
 
   // 钱迹专属：标签列按家庭成员匹配（命中成员名 → 填 member_id，否则继续作为标签）
   const [qianjiTagAsMember, setQianjiTagAsMember] = useState(() => {
@@ -183,6 +192,29 @@ export default function ImportPage() {
       const fallbackAccount = loadedAccounts.find(a =>
         fallbackHints.some(kw => a.name.includes(kw)) && a.category === '资金账户'
       )
+
+      // 初始化原始账户映射：后端返回的 account_id 优先；为 null 的用启发式兜底
+      const initMap = new Map<string, number | null>()
+      const remembered = new Set<string>()
+      const backendMappings = parseRes.data.account_mappings || []
+      for (const m of backendMappings) {
+        if (m.account_id != null) {
+          initMap.set(m.raw_name, m.account_id)
+          remembered.add(m.raw_name)  // 后端有记录 = "已记忆"
+        } else {
+          // 历史无映射：用启发式 + 来源兜底（空 raw_name 走 fallbackAccount，模拟整本账单）
+          let guess: number | null = null
+          if (m.raw_name) {
+            guess = autoMatchAccount(m.raw_name, loadedAccounts) ?? fallbackAccount?.id ?? null
+          } else {
+            guess = fallbackAccount?.id ?? null
+          }
+          initMap.set(m.raw_name, guess)
+        }
+      }
+      setAccountMappings(initMap)
+      setRememberedRawNames(remembered)
+
       const enriched = txns.map(t => {
         if (t.type === 'transfer') {
           // 9.6 零钱通转账：根据 description 含"存入/转入"或"转出"判断方向
@@ -197,9 +229,12 @@ export default function ImportPage() {
             to_account_id: t.to_account_id ?? (isInflow ? zqtId : otherId),
           }
         }
+        // 非转账：account_id 优先级 = 后端预填（来自映射记忆） > 前端启发式映射 > 兜底
+        const fromMap = initMap.get(t.payment_method || '')
         return {
           ...t,
           account_id: t.account_id
+            ?? (fromMap !== undefined ? fromMap : null)
             ?? autoMatchAccount(t.payment_method, loadedAccounts)
             ?? fallbackAccount?.id
             ?? null,
@@ -231,7 +266,13 @@ export default function ImportPage() {
       setParseMessage(parseRes.data.message || '')
       setBatchTagIds([])
       if (enriched.length > 0 || enrichedReim.length > 0) {
-        setStep('preview')
+        // 流程分支：有任何 raw_name 未在记忆表里 → 进 mapping 让用户先选；否则直接 preview
+        const hasUnremembered = backendMappings.some(m => !remembered.has(m.raw_name))
+        if (hasUnremembered) {
+          setStep('mapping')
+        } else {
+          setStep('preview')
+        }
       } else {
         alert(parseRes.data.message || '未能解析出任何交易记录')
       }
@@ -289,6 +330,22 @@ export default function ImportPage() {
     )
   }
 
+  // 改某个 payment_method 的目标账户：写 map state + 同步所有该 raw_name 的非转账交易
+  const updateMapping = (rawName: string, accountId: number | null) => {
+    setAccountMappings(prev => {
+      const next = new Map(prev)
+      next.set(rawName, accountId)
+      return next
+    })
+    setTransactions(prev => prev.map(t => {
+      if (t.type === 'transfer') return t
+      if ((t.payment_method || '') === rawName) {
+        return { ...t, account_id: accountId }
+      }
+      return t
+    }))
+  }
+
   const toggleReimSelect = (idx: number) => {
     const next = new Set(selectedReimIdx)
     if (next.has(idx)) next.delete(idx)
@@ -343,7 +400,10 @@ export default function ImportPage() {
 
     setSaving(true)
     try {
-      const res = await importApi.save(source, toSave, reimToSave)
+      const mappingsToSave: AccountMappingItem[] = Array.from(accountMappings.entries()).map(
+        ([raw_name, account_id]) => ({ raw_name, account_id })
+      )
+      const res = await importApi.save(source, toSave, reimToSave, mappingsToSave)
       const parts = [`交易 ${res.data.saved} 条`]
       if (res.data.reim_saved) parts.push(`报销记录 ${res.data.reim_saved} 条`)
       if (res.data.reim_linked) parts.push(`已关联原账单 ${res.data.reim_linked} 条`)
@@ -435,10 +495,99 @@ export default function ImportPage() {
     )
   }
 
+  // ─── 账户映射 step：先让用户把账单里出现的支付方式映射到 APP 账户，再进 preview ───
+  if (step === 'mapping') {
+    const pmCounts = new Map<string, number>()
+    for (const t of transactions) {
+      if (t.type === 'transfer') continue
+      const key = t.payment_method || ''
+      pmCounts.set(key, (pmCounts.get(key) || 0) + 1)
+    }
+    const sortedPms = Array.from(pmCounts.entries()).sort((a, b) => b[1] - a[1])
+    const unmappedCount = sortedPms.filter(([rn]) => !accountMappings.get(rn)).length
+
+    return (
+      <div className="page-content">
+        <div className="page-header">
+          <button className="back-btn" onClick={() => setStep('select')}>←</button>
+          账户映射
+        </div>
+        <div style={{ padding: '0 16px' }}>
+          <div style={{ margin: '8px 0', padding: '10px 14px', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, fontSize: 13, color: '#5b21b6' }}>
+            📥 把账单里出现的支付方式映射到 APP 账户。下次导入相同来源的账单会自动按这次的映射预填，不用再选。
+          </div>
+
+          {sortedPms.length === 0 ? (
+            <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>
+              本次账单没有可映射的支付方式（仅含转账行）
+            </div>
+          ) : sortedPms.map(([rawName, count]) => {
+            const mapped = accountMappings.get(rawName) ?? null
+            const isEmpty = rawName === ''
+            const isRemembered = rememberedRawNames.has(rawName)
+            return (
+              <div key={rawName || '__empty__'} className="card" style={{ margin: '8px 0', padding: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {isEmpty
+                      ? <span style={{ color: '#6b7280' }}>📄 整本账单（未标注支付方式）</span>
+                      : <span>{rawName}</span>}
+                  </div>
+                  <span style={{
+                    fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                    background: isRemembered ? '#dcfce7' : '#fef3c7',
+                    color: isRemembered ? '#15803d' : '#b45309',
+                    whiteSpace: 'nowrap', marginLeft: 8,
+                  }}>
+                    {isRemembered ? '已记忆' : '新'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>
+                  共 {count} 条交易
+                </div>
+                <select
+                  value={mapped ?? ''}
+                  onChange={e => updateMapping(rawName, e.target.value ? parseInt(e.target.value) : null)}
+                  style={{
+                    width: '100%', padding: '6px 10px', fontSize: 13,
+                    border: mapped ? '1px solid #a78bfa' : '1px dashed #d1d5db',
+                    borderRadius: 6,
+                    background: mapped ? '#f5f3ff' : '#f9fafb',
+                    color: mapped ? '#6d28d9' : '#9ca3af',
+                  }}>
+                  <option value="">未关联（这部分交易不会自动选账户）</option>
+                  {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                </select>
+              </div>
+            )
+          })}
+
+          {sortedPms.length > 0 && (
+            <>
+              <button className="btn-primary" onClick={() => setStep('preview')} style={{ marginTop: 16 }}>
+                {unmappedCount > 0 ? `下一步:预览交易(${unmappedCount} 个未关联)` : '下一步:预览交易'}
+              </button>
+              {unmappedCount > 0 && (
+                <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
+                  未关联的支付方式不会被记忆,对应交易在预览页可单独选择账户
+                </div>
+              )}
+            </>
+          )}
+          {sortedPms.length === 0 && (
+            <button className="btn-primary" onClick={() => setStep('preview')} style={{ marginTop: 16 }}>
+              下一步:预览交易
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page-content">
       <div className="page-header">
-        <button className="back-btn" onClick={() => setStep('select')}>←</button>
+        <button className="back-btn" onClick={() => setStep('mapping')}>←</button>
         预览导入 ({selectedIdx.size}/{transactions.length}
         {reimbursements.length > 0 ? ` + 报销${selectedReimIdx.size}/${reimbursements.length}` : ''})
       </div>
@@ -466,6 +615,32 @@ export default function ImportPage() {
             ⚠️ 检测到 <strong>{reimDupCount}</strong> 条报销记录已存在（external_id 重复），已默认取消勾选
           </div>
         )}
+
+        {/* 已应用映射提示条：点击"修改"回到独立映射 step */}
+        {accountMappings.size > 0 && (() => {
+          const total = accountMappings.size
+          const mapped = Array.from(accountMappings.values()).filter(v => v != null).length
+          return (
+            <div style={{
+              margin: '8px 0',
+              padding: '10px 14px',
+              background: '#f5f3ff',
+              border: '1px solid #ddd6fe',
+              borderRadius: 10,
+              fontSize: 13,
+              color: '#5b21b6',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <span>📥 已为 <strong>{mapped}/{total}</strong> 个支付方式关联了 APP 账户</span>
+              <button onClick={() => setStep('mapping')}
+                style={{ background: 'none', border: '1px solid #c4b5fd', color: '#6d28d9', borderRadius: 6, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>
+                修改映射
+              </button>
+            </div>
+          )
+        })()}
 
         <div className="card" style={{ margin: '8px 0' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>

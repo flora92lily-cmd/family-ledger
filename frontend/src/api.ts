@@ -240,6 +240,12 @@ export interface ParsedReimbursement {
   to_account_id: number | null
 }
 
+// === 导入账户映射（payment_method ↔ account_id 记忆） ===
+export interface AccountMappingItem {
+  raw_name: string
+  account_id: number | null
+}
+
 // === API calls ===
 
 export const tagApi = {
@@ -291,6 +297,7 @@ export const importApi = {
       filtered_out?: number
       transactions: ParsedTransaction[]
       reimbursements: ParsedReimbursement[]
+      account_mappings: AccountMappingItem[]
       message?: string
     }>(
       '/api/imports/parse',
@@ -298,10 +305,15 @@ export const importApi = {
       { headers: { 'Content-Type': 'multipart/form-data' } }
     )
   },
-  save: (source: string, transactions: Array<Record<string, unknown>>, reimbursements: Array<Record<string, unknown>> = []) =>
-    api.post<{ saved: number; reim_saved: number; reim_linked: number }>(
+  save: (
+    source: string,
+    transactions: Array<Record<string, unknown>>,
+    reimbursements: Array<Record<string, unknown>> = [],
+    account_mappings: AccountMappingItem[] = [],
+  ) =>
+    api.post<{ saved: number; reim_saved: number; reim_linked: number; mappings_saved: number }>(
       '/api/imports/save',
-      { source, transactions, reimbursements }
+      { source, transactions, reimbursements, account_mappings }
     ),
 }
 

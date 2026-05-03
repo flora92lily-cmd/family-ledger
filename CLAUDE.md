@@ -49,9 +49,10 @@ backend/
   main.py                  # FastAPI app, lifespan (init_db + seed), router registration
   app/
     database.py            # Engine, async_session, init_db (creates tables + migration + member→tag migration)
+                           #   init_db 步骤②兜底表含 payment_method_mappings
     models.py              # SQLAlchemy ORM: TagCategory, Tag, transaction_tags/account_tags/holding_tags,
                            #   FamilyMember(保留备用), Category, Transaction, Account, Holding,
-                           #   ReimbursementRecord, reimbursement_items
+                           #   ReimbursementRecord, reimbursement_items, PaymentMethodMapping
     schemas.py             # Pydantic v2 request/response models（含 TagCategoryOut/TagOut/TagBrief）
                            #   ⚠️ 字段名与类型名同名冲突：用 `from datetime import date as Date` alias 规避
                            #      例：ReimbursementItemOut.date 字段 type 写 Optional[Date] 而非 Optional[date]
@@ -68,6 +69,9 @@ backend/
       accounts.py          # /api/accounts/ CRUD, current_balance computed from linked transactions + holdings
       holdings.py          # /api/holdings/ CRUD + /refresh, /refresh-all, /summary
       imports.py           # /api/imports/parse (file upload), /save (batch insert, save 时才创建新标签)
+                           #   parse 末尾聚合 distinct payment_method，查 payment_method_mappings 历史映射，
+                           #   返回 account_mappings 列表（raw_name + account_id）并预填 ParsedTxnOut.account_id
+                           #   save 末尾 upsert payment_method_mappings（account_id=None 的项跳过不写）
                            #   save 同时接收 reimbursements 列表，按 external_id 跨批次关联原账单
       reimbursements.py    # /api/reimbursements/ CRUD：pending list / create / delete(revoke)
     parsers/
@@ -99,7 +103,12 @@ frontend/src/
     InvestPage.tsx         # Investment holdings, price refresh, add/edit modal（持仓支持标签）
     SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（账户支持标签）+ 分类管理
                            #   + 导入账单入口 + 报销管理入口（导航到 /reimbursements）
-    ImportPage.tsx         # File upload → parse → preview (per-txn account/category/tag) → save
+    ImportPage.tsx         # 三步流程：select（上传）→ mapping（账户映射）→ preview（预览确认）→ save
+                           #   mapping step：列出账单 distinct payment_method，每行选对应 APP 账户；
+                           #     后端已记忆的项显示"已记忆"徽标，首次出现显示"新"；
+                           #     全部已记忆时自动跳过 mapping 直接进 preview；
+                           #     updateMapping() 副作用：同步更新所有同 payment_method 的非转账交易 account_id
+                           #   preview 顶部小横幅显示映射覆盖率，点"修改映射"可回到 mapping step
                            #   批量标签：选中即实时显示，取消即实时移除（虚拟叠加模式）
                            #   钱迹标签：绿色 tag_names 字符串展示，save 时后端才落库
                            #   钱迹报销：预览页底部独立分组显示"报销到账记录"，save 时一并提交
@@ -120,11 +129,19 @@ frontend/src/
   await db.execute(sa_insert(transaction_tags).values(...))
   ```
 
-#### 导入流程（含标签）
-- **parse 阶段**：不创建任何标签，只返回 `tag_names: list[str]`（钱迹原始字符串）
+#### 导入流程（含标签 + 账户映射）
+- **parse 阶段**：不创建任何标签，只返回 `tag_names: list[str]`（钱迹原始字符串）；同时查 `payment_method_mappings` 返回历史账户映射并预填 `account_id`
+- **mapping 阶段**（前端独立 step）：用户为每个 payment_method 选对应 APP 账户；全部已记忆时自动跳过
 - **preview 阶段**：钱迹标签显示为绿色字符串 pill；其他来源支持批量标签（虚拟叠加）+ 单条追加
-- **save 阶段**：`_resolve_tag_names()` 在此时才真正建库（已存在→直接用，归档状态不变；不存在→创建到"导入标签"分类）
+- **save 阶段**：`_resolve_tag_names()` 在此时才真正建库（已存在→直接用，归档状态不变；不存在→创建到"导入标签"分类）；同时 upsert `payment_method_mappings`（account_id=None 的条目跳过）
 - 批量标签在保存时与单条 tag_ids 合并去重后提交
+
+#### 账户映射记忆（PaymentMethodMapping）
+- 表 `payment_method_mappings`：字段 `source`（alipay/wechat/bank_pdf/qianji/generic） + `raw_name`（原始账户名，bank_pdf 用空字符串 `""`）+ `account_id`，UNIQUE(source, raw_name)
+- **按 source 区分**：同名字符串在不同来源语义可能不同（如"零钱"在微信 vs 钱迹），独立映射避免污染
+- **空 payment_method**：bank_pdf 等无支付方式的账单，统一用 `""` 作 key，前端渲染为"📄 整本账单（未标注支付方式）"
+- **转账交易**：不进入映射逻辑（type='transfer' 跳过），保留原有双账户启发式
+- **账户删除**：`ON DELETE SET NULL`，下次 parse 时该 raw_name 的映射 account_id 返回 None，显示"未关联"
 
 #### 其他模式
 - **Categories are hierarchical**: `parent_id` enables two-level nesting. `/api/categories/tree` returns tree structure; flat `/api/categories/` used for dropdowns.
@@ -132,7 +149,7 @@ frontend/src/
 - **Account balance**: `Account.balance` is the user-set initial balance. `AccountOut.current_balance` is dynamically computed: `initial_balance ± transactions + 绑定持仓市值（投资理财账户）`.
 - **AddPage 记账/编辑**：只有一个"备注（可选）"输入，映射到 `description` 字段（用于列表显示）。**Transaction.note 字段已删除**，所有账单备注统一存 `description`（手动 + 导入）。Account/Holding/ReimbursementRecord 的 `note` 字段保留（设置页/投资页/报销页仍在用）。
 - **Smart categorization**：分三级优先：(1) ParsedTransaction 的 `source_category_name` / `source_parent_category_name` 在 Category 表里按 type+name 直接查（钱迹走这条）；(2) `Category.keywords` 关键词匹配 description + counterparty；(3) 兜底"其他支出"/"其他收入"。导入时如果 ParsedTransaction.category_id 已被解析阶段设过，categorizer 不会覆盖。
-- **DB migration**: `database.py:init_db()` 分三步：① `Base.metadata.create_all`（新表）→ ② `CREATE TABLE IF NOT EXISTS` 显式兜底（防止旧 DB 漏建新表，目前含 `reimbursement_records` / `reimbursement_items`）→ ③ `ALTER TABLE ADD COLUMN` + try/except 增量加列。`_migrate_members_to_tags()` 将旧 FamilyMember 数据迁移到 TagCategory/Tag（幂等，tag_categories 表非空时跳过）。
+- **DB migration**: `database.py:init_db()` 分三步：① `Base.metadata.create_all`（新表）→ ② `CREATE TABLE IF NOT EXISTS` 显式兜底（防止旧 DB 漏建新表，目前含 `reimbursement_records` / `reimbursement_items` / `payment_method_mappings`）→ ③ `ALTER TABLE ADD COLUMN` + try/except 增量加列。`_migrate_members_to_tags()` 将旧 FamilyMember 数据迁移到 TagCategory/Tag（幂等，tag_categories 表非空时跳过）。
 - **Price service**: Synchronous HTTP calls wrapped in `asyncio.run_in_executor`. Fund: eastmoney f10/lsjz；Stock: Tencent qt.gtimg.cn（600xxx→sh, 000xxx/300xxx→sz）。
 - **Async relationship loading**: READ 时用 `selectinload()`；WRITE 时直接操作关联表（见上方标签系统说明）。
 
@@ -145,6 +162,7 @@ frontend/src/
 - **⚠️ reimbursement_items 写入**：与 transaction_tags 同理，直接用 `sa_insert(reimbursement_items).values(...)` 操作关联表，禁止 ORM relationship 赋值
 
 ### Data model relationships
+- PaymentMethodMapping → Account (FK via account_id, ON DELETE SET NULL)
 - Transaction → Category (FK), Transaction → Account (FK via account_id), Transaction → Account (FK via to_account_id)
 - Transaction ↔ Tag (many-to-many via transaction_tags)
 - Transaction ↔ ReimbursementRecord (many-to-many via reimbursement_items)
@@ -190,6 +208,7 @@ frontend/src/
 - ~~**需求9.1：钱迹备注列**~~ — 钱迹 CSV 的备注列正确保存到 `Transaction.note`
 - ~~**需求8：报销管理模块**~~ — Transaction 新增报销字段；ReimbursementRecord + reimbursement_items 表；/api/reimbursements/ CRUD；统计剔除可报销支出；账户余额联动到账金额；钱迹 CSV 解析报销/报销记录类型；导入预览页显示报销类账单 + 报销到账记录；AddPage 可报销开关；ReimbursementPage（未报/已报/批量提交/撤销）；SettingsPage 入口；HomePage 状态 pill + 详情卡
 - ~~**需求9 导入完善**~~ — 9.3 支付宝商品说明已存 description（无需改动）；9.4 微信 description="交易对方，商品" 智能拼接；9.5 支付宝不计收支三档：交易关闭/退款跳过、含"余额宝"→income、其他→expense+`default_unchecked`默认不勾选；9.6 微信收/支="/" 且含"零钱通"→type=transfer，方向按"存入/转入"vs"转出"判断；ImportPage transfer 行渲染双账户选择器（紫色→分隔）+ 自动匹配零钱通账户；ParsedTransaction 新增 `default_unchecked` 字段，前端初始勾选时排除并加"需确认"徽标
+- ~~**导入账户映射记忆**~~ — 新增 `payment_method_mappings` 表（source+raw_name 唯一）；导入流程扩展为三步：上传→账户映射→预览；parse 返回历史映射并预填 account_id；mapping step 列出 distinct payment_method，已记忆项自动预选（全部已记忆时跳过此步）；save 时 upsert 映射；updateMapping() 批量同步同支付方式的所有非转账交易
 
 ### 🔙 回滚
 

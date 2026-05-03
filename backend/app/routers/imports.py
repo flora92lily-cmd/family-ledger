@@ -4,16 +4,17 @@
 1. POST /api/imports/parse  上传文件 → 返回解析后的交易（未入库）+ 报销记录（未入库）
 2. POST /api/imports/save   提交确认后的交易列表 + 报销记录列表 → 批量入库 + 建立关联
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert as sa_insert, update as sa_update
+from sqlalchemy import select, insert as sa_insert, update as sa_update, delete as sa_delete
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
 from app.models import (
     Transaction, Tag, TagCategory, transaction_tags,
     ReimbursementRecord, reimbursement_items, Account,
+    PaymentMethodMapping,
 )
 from app.parsers import get_parser, ParsedReimbursement
 from app.parsers.categorizer import categorize_transactions
@@ -34,6 +35,7 @@ class ParsedTxnOut(BaseModel):
     counterparty: str
     category_id: Optional[int]
     category_name: Optional[str]
+    account_id: Optional[int] = None  # 由历史 payment_method 映射预填（仅非 transfer）
     payment_method: str
     raw: str
     is_duplicate: bool = False
@@ -45,6 +47,12 @@ class ParsedTxnOut(BaseModel):
     reimbursement_status: str = "none"
     external_id: str = ""
     default_unchecked: bool = False  # 解析时建议默认不勾选
+
+
+class AccountMappingItem(BaseModel):
+    """payment_method ↔ account_id 的映射条目（双向用于 parse 返回 / save 提交）"""
+    raw_name: str
+    account_id: Optional[int] = None
 
 
 class ParsedReimOut(BaseModel):
@@ -94,6 +102,7 @@ class ImportRequest(BaseModel):
     source: str
     transactions: list[ImportTxnIn]
     reimbursements: list[ImportReimIn] = []
+    account_mappings: list[AccountMappingItem] = []  # 本次导入的 (payment_method → account_id) 映射，save 时 upsert
 
 
 async def _resolve_tag_names(tag_names: list[str], db: AsyncSession) -> list[int]:
@@ -245,10 +254,31 @@ async def parse_bill(
             if r.external_id and r.external_id in existing_reim_set:
                 reim_dup.add(i)
 
-    # 构造返回交易列表
+    # 历史账户映射查询：聚合非转账交易的 distinct payment_method（含空字符串），
+    # 在 payment_method_mappings 表里按 (source, raw_name) 拿历史 account_id
+    distinct_pm = sorted({(t.payment_method or "") for t in transactions if t.type != "transfer"})
+    pm_to_account: dict[str, Optional[int]] = {}
+    if distinct_pm:
+        rows = (await db.execute(
+            select(PaymentMethodMapping.raw_name, PaymentMethodMapping.account_id).where(
+                PaymentMethodMapping.source == source,
+                PaymentMethodMapping.raw_name.in_(distinct_pm),
+            )
+        )).all()
+        # 校验 account_id 仍然指向存在的账户（被删除则置空）
+        existing_account_ids = {a.id for a in accounts}
+        for raw_name, acc_id in rows:
+            if acc_id and acc_id not in existing_account_ids:
+                acc_id = None
+            pm_to_account[raw_name] = acc_id
+
+    # 构造返回交易列表（用映射预填 account_id，仅非转账）
     parsed_out = []
     for i, t in enumerate(transactions):
         tag_names: list[str] = t.tags or []
+        prefilled_account_id: Optional[int] = None
+        if t.type != "transfer":
+            prefilled_account_id = pm_to_account.get(t.payment_method or "")
         parsed_out.append(ParsedTxnOut(
             index=i,
             amount=t.amount,
@@ -258,6 +288,7 @@ async def parse_bill(
             counterparty=t.counterparty,
             category_id=t.category_id,
             category_name=t.category_name,
+            account_id=prefilled_account_id,
             payment_method=t.payment_method,
             raw=t.raw,
             is_duplicate=(i in duplicate_indices),
@@ -293,6 +324,13 @@ async def parse_bill(
     if filtered_out > 0 and not parsed_out and not reim_out:
         msg = f"日期范围内未匹配到任何记录（共过滤掉 {filtered_out} 条）"
 
+    # 构造 account_mappings 返回：每个 distinct payment_method 一条（含空字符串），
+    # account_id 为历史映射结果（无映射或被删账户则 None，前端会再做启发式兜底）
+    account_mappings_out = [
+        AccountMappingItem(raw_name=pm, account_id=pm_to_account.get(pm))
+        for pm in distinct_pm
+    ]
+
     return {
         "count": len(parsed_out),
         "dup_count": len(duplicate_indices),
@@ -301,6 +339,7 @@ async def parse_bill(
         "filtered_out": filtered_out,
         "transactions": parsed_out,
         "reimbursements": reim_out,
+        "account_mappings": account_mappings_out,
         "message": msg,
     }
 
@@ -406,9 +445,32 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
                 )
                 reim_linked += 1
 
+    # upsert 账户映射：account_id 为 None 的条目跳过（用户没决定，不存）
+    mappings_saved = 0
+    for m in req.account_mappings:
+        if m.account_id is None:
+            continue
+        # 删旧再插入（SQLite 跨方言通用，比 ON CONFLICT 显式）
+        await db.execute(
+            sa_delete(PaymentMethodMapping).where(
+                PaymentMethodMapping.source == req.source,
+                PaymentMethodMapping.raw_name == m.raw_name,
+            )
+        )
+        await db.execute(
+            sa_insert(PaymentMethodMapping).values(
+                source=req.source,
+                raw_name=m.raw_name,
+                account_id=m.account_id,
+                last_used_at=datetime.now(),
+            )
+        )
+        mappings_saved += 1
+
     await db.commit()
     return {
         "saved": saved,
         "reim_saved": reim_saved,
         "reim_linked": reim_linked,
+        "mappings_saved": mappings_saved,
     }
