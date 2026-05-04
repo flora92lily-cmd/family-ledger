@@ -13,11 +13,12 @@ from typing import Optional
 from app.database import get_db
 from app.models import (
     Transaction, Tag, TagCategory, transaction_tags,
-    ReimbursementRecord, reimbursement_items, Account,
+    ReimbursementRecord, reimbursement_items, Account, Holding,
     PaymentMethodMapping,
 )
 from app.parsers import get_parser, ParsedReimbursement
 from app.parsers.categorizer import categorize_transactions
+from app.price_service import search_fund_by_name, fetch_fund_nav_on
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
 
@@ -47,6 +48,14 @@ class ParsedTxnOut(BaseModel):
     reimbursement_status: str = "none"
     external_id: str = ""
     default_unchecked: bool = False  # 解析时建议默认不勾选
+    # 投资交易识别（detector 已识别 + 后端预匹配/反查）
+    detected_action: str = ""           # buy / sell / ""
+    detected_asset_type: str = ""       # fund / stock / ""
+    detected_name: str = ""             # 提取的基金名
+    detected_code: str = ""
+    target_holding_id: Optional[int] = None
+    target_holding_name: Optional[str] = None
+    fund_search_candidates: list[dict] = []  # [{code, name}]，本地匹配不到时给前端选
 
 
 class AccountMappingItem(BaseModel):
@@ -86,6 +95,13 @@ class ImportTxnIn(BaseModel):
     reimbursable_amount: float = 0
     reimbursement_status: str = "none"
     external_id: str = ""
+    # 投资交易（save 时用于自动算份额 / 当场建仓）
+    detected_action: str = ""           # buy / sell / ""
+    detected_asset_type: str = ""       # fund / stock / ""
+    target_holding_id: Optional[int] = None
+    new_holding_code: Optional[str] = None
+    new_holding_name: Optional[str] = None
+    new_holding_account_id: Optional[int] = None
 
 
 class ImportReimIn(BaseModel):
@@ -207,6 +223,33 @@ async def parse_bill(
     # 智能分类（仅对 Transaction）
     transactions = await categorize_transactions(transactions, db)
 
+    # 投资交易后处理：本地 holdings 名称匹配 → 反查 eastmoney 候选
+    invest_txns = [t for t in transactions if t.detected_action]
+    fund_search_results: dict[str, list[dict]] = {}
+    holding_id_to_name: dict[int, str] = {}
+    if invest_txns:
+        local_holdings = (await db.execute(
+            select(Holding).where(Holding.asset_type.in_(["fund", "stock"]))
+        )).scalars().all()
+        holding_id_to_name = {h.id: h.name for h in local_holdings}
+        # 双向 substring 匹配
+        for t in invest_txns:
+            if not t.detected_name:
+                continue
+            for h in local_holdings:
+                if h.name and (h.name in t.detected_name or t.detected_name in h.name):
+                    t.target_holding_id = h.id
+                    break
+        # 收集本地未命中的 fund 名称，去 eastmoney 反查
+        unmatched = sorted({
+            t.detected_name for t in invest_txns
+            if t.detected_asset_type == "fund"
+            and t.target_holding_id is None
+            and t.detected_name
+        })
+        for name in unmatched:
+            fund_search_results[name] = await search_fund_by_name(name)
+
     # 账户列表（用于报销记录匹配到账账户）
     accounts = (await db.execute(select(Account))).scalars().all()
 
@@ -254,9 +297,13 @@ async def parse_bill(
             if r.external_id and r.external_id in existing_reim_set:
                 reim_dup.add(i)
 
-    # 历史账户映射查询：聚合非转账交易的 distinct payment_method（含空字符串），
-    # 在 payment_method_mappings 表里按 (source, raw_name) 拿历史 account_id
-    distinct_pm = sorted({(t.payment_method or "") for t in transactions if t.type != "transfer"})
+    # 历史账户映射查询：聚合需要按 payment_method 决定 from 账户的交易的 distinct payment_method
+    # （非 transfer 交易 + 投资买入/赎回 transfer——后者 from 端是资金账户，按 payment_method 映射）
+    distinct_pm = sorted({
+        (t.payment_method or "")
+        for t in transactions
+        if t.type != "transfer" or t.detected_action
+    })
     pm_to_account: dict[str, Optional[int]] = {}
     if distinct_pm:
         rows = (await db.execute(
@@ -272,12 +319,12 @@ async def parse_bill(
                 acc_id = None
             pm_to_account[raw_name] = acc_id
 
-    # 构造返回交易列表（用映射预填 account_id，仅非转账）
+    # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer 都填）
     parsed_out = []
     for i, t in enumerate(transactions):
         tag_names: list[str] = t.tags or []
         prefilled_account_id: Optional[int] = None
-        if t.type != "transfer":
+        if t.type != "transfer" or t.detected_action:
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
         parsed_out.append(ParsedTxnOut(
             index=i,
@@ -299,6 +346,13 @@ async def parse_bill(
             reimbursement_status=t.reimbursement_status,
             external_id=t.external_id,
             default_unchecked=t.default_unchecked,
+            detected_action=t.detected_action,
+            detected_asset_type=t.detected_asset_type,
+            detected_name=t.detected_name,
+            detected_code=t.detected_code,
+            target_holding_id=t.target_holding_id,
+            target_holding_name=holding_id_to_name.get(t.target_holding_id) if t.target_holding_id else None,
+            fund_search_candidates=fund_search_results.get(t.detected_name, []) if t.detected_name and t.target_holding_id is None else [],
         ))
 
     # 构造返回报销记录列表（自动匹配到账账户）
@@ -351,6 +405,10 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
     # external_id → transaction.id 映射（用于关联报销记录）
     ext_to_txn_id: dict[str, int] = {}
 
+    holdings_updated = 0
+    holdings_created = 0
+    holdings_warnings: list[str] = []
+
     for t in req.transactions:
         # 如果标记可报销但没填 reimbursable_amount，兜底=amount
         reimbursable_amount = t.reimbursable_amount
@@ -360,6 +418,24 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
                 reimbursable_amount = t.amount
             if reimbursement_status == "none":
                 reimbursement_status = "pending"
+
+        # 当场建仓：投资交易但前端提供了 new_holding_code（用户选了 eastmoney 候选）
+        target_holding_id = t.target_holding_id
+        if t.detected_action and target_holding_id is None and t.new_holding_code:
+            new_h = Holding(
+                name=(t.new_holding_name or t.new_holding_code),
+                code=t.new_holding_code,
+                asset_type=(t.detected_asset_type or "fund"),
+                shares=0,
+                cost_price=0,
+                current_price=0,
+                current_value=0,
+                account_id=t.new_holding_account_id,
+            )
+            db.add(new_h)
+            await db.flush()
+            target_holding_id = new_h.id
+            holdings_created += 1
 
         txn = Transaction(
             amount=t.amount,
@@ -390,6 +466,35 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
             all_tag_ids = list(set(all_tag_ids + resolved))
         for tag_id in all_tag_ids:
             await db.execute(sa_insert(transaction_tags).values(transaction_id=txn.id, tag_id=tag_id))
+
+        # 投资交易：自动按账单日历史净值算份额，更新 holding
+        if t.detected_action and target_holding_id and t.detected_asset_type == "fund":
+            h = await db.get(Holding, target_holding_id)
+            if h and h.code:
+                nav = await fetch_fund_nav_on(h.code, t.date)
+                if not nav and h.current_price > 0:
+                    nav = h.current_price  # fallback：用当前净值（粗估）
+                if nav and nav > 0:
+                    delta_shares = round(t.amount / nav, 6)
+                    if t.detected_action == "buy":
+                        old_shares = h.shares or 0
+                        new_shares = old_shares + delta_shares
+                        if new_shares > 0:
+                            h.cost_price = round(
+                                (h.cost_price * old_shares + t.amount) / new_shares, 6
+                            )
+                        h.shares = round(new_shares, 6)
+                    elif t.detected_action == "sell":
+                        h.shares = round(max(0.0, (h.shares or 0) - delta_shares), 6)
+                    h.current_price = nav
+                    h.current_value = round(h.shares * nav, 2)
+                    holdings_updated += 1
+                else:
+                    holdings_warnings.append(f"{h.name}：未能查到 {t.date} 净值，份额未更新")
+            elif h and not h.code:
+                holdings_warnings.append(f"{h.name}：缺少基金代码，份额未更新")
+        elif t.detected_action == "buy" and t.detected_asset_type == "stock":
+            holdings_warnings.append("股票买入暂不自动算份额，请到持仓页手动调整")
 
         saved += 1
 
@@ -473,4 +578,7 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
         "reim_saved": reim_saved,
         "reim_linked": reim_linked,
         "mappings_saved": mappings_saved,
+        "holdings_created": holdings_created,
+        "holdings_updated": holdings_updated,
+        "holdings_warnings": holdings_warnings,
     }

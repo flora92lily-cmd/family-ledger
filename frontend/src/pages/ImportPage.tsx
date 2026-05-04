@@ -6,6 +6,7 @@ import {
   tagApi,
   accountApi,
   memberApi,
+  holdingApi,
   type ParsedTransaction,
   type ParsedReimbursement,
   type CategoryTree,
@@ -13,6 +14,8 @@ import {
   type Account,
   type FamilyMember,
   type AccountMappingItem,
+  type Holding,
+  type FundCandidate,
 } from '../api'
 
 // 支付方式关键词 → 账户名关键词映射
@@ -77,6 +80,9 @@ export default function ImportPage() {
   const [catTree, setCatTree] = useState<CategoryTree[]>([])
   const [tags, setTags] = useState<Tag[]>([])          // 未归档标签
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [holdings, setHoldings] = useState<Holding[]>([])
+  // 当前导入会话中前端临时建仓：detected_name → { code, name, account_id }（save 时随交易传给后端建库）
+  const [pendingNewHoldings, setPendingNewHoldings] = useState<Map<string, { code: string; name: string; account_id: number | null }>>(new Map())
   const [members, setMembers] = useState<FamilyMember[]>([])
   const [batchMemberId, setBatchMemberId] = useState<number | null>(null)
   const [_parseMessage, setParseMessage] = useState('')
@@ -109,6 +115,7 @@ export default function ImportPage() {
     tagApi.list({ include_archived: false }).then(r => setTags(r.data))
     accountApi.list().then(r => setAccounts(r.data))
     memberApi.list().then(r => setMembers(r.data))
+    holdingApi.list().then(r => setHoldings(r.data))
   }, [])
 
   useEffect(() => {
@@ -175,12 +182,15 @@ export default function ImportPage() {
             end_date: qianjiEndDate || undefined,
           }
         : undefined
-      const [parseRes, acctRes] = await Promise.all([
+      const [parseRes, acctRes, holdRes] = await Promise.all([
         importApi.parse(source, file, parseOpts),
         accountApi.list(),
+        holdingApi.list(),
       ])
       const loadedAccounts = acctRes.data
+      const loadedHoldings = holdRes.data
       setAccounts(loadedAccounts)
+      setHoldings(loadedHoldings)
 
       const txns = parseRes.data.transactions
       const reims = parseRes.data.reimbursements || []
@@ -216,6 +226,29 @@ export default function ImportPage() {
       setRememberedRawNames(remembered)
 
       const enriched = txns.map(t => {
+        // 投资 transfer：from = 资金账户（payment_method 映射）；to = target_holding 的绑定账户
+        if (t.type === 'transfer' && t.detected_action) {
+          const fromMap = initMap.get(t.payment_method || '')
+          const fundAccount = fromMap
+            ?? autoMatchAccount(t.payment_method, loadedAccounts)
+            ?? fallbackAccount?.id
+            ?? null
+          const targetH = t.target_holding_id ? loadedHoldings.find(h => h.id === t.target_holding_id) : null
+          const investAccount = targetH?.account_id ?? null
+          if (t.detected_action === 'buy') {
+            return {
+              ...t,
+              account_id: t.account_id ?? fundAccount,
+              to_account_id: t.to_account_id ?? investAccount,
+            }
+          }
+          // sell
+          return {
+            ...t,
+            account_id: t.account_id ?? investAccount,
+            to_account_id: t.to_account_id ?? fundAccount,
+          }
+        }
         if (t.type === 'transfer') {
           // 9.6 零钱通转账：根据 description 含"存入/转入"或"转出"判断方向
           const zqtId = matchAccountByKeywords(['零钱通'], loadedAccounts)
@@ -360,27 +393,44 @@ export default function ImportPage() {
   const handleSave = async () => {
     const toSave = transactions
       .filter(t => selectedIdx.has(t.index))
-      .map(t => ({
-        amount: t.amount,
-        type: t.type,
-        date: t.date,
-        description: t.description,
-        counterparty: t.counterparty,
-        category_id: t.category_id,
-        account_id: t.account_id ?? null,
-        to_account_id: t.to_account_id ?? null,
-        // 优先级：单条 > 批量 > null
-        member_id: t.member_id ?? batchMemberId ?? null,
-        // 合并批量标签 + 单条标签（去重）
-        tag_ids: [...new Set([...batchTagIds, ...t.tag_ids])],
-        // 钱迹原始标签名交给后端在 save 时建库
-        tag_names: t.tag_names,
-        // 报销字段（钱迹 parse 时自动填充，用户也可在预览页修改）
-        is_reimbursable: t.is_reimbursable,
-        reimbursable_amount: t.reimbursable_amount,
-        reimbursement_status: t.reimbursement_status,
-        external_id: t.external_id,
-      }))
+      .map(t => {
+        // 投资交易：附带 detected_* 和当场建仓信息
+        const investExtras: Record<string, unknown> = {}
+        if (t.detected_action) {
+          investExtras.detected_action = t.detected_action
+          investExtras.detected_asset_type = t.detected_asset_type
+          investExtras.target_holding_id = t.target_holding_id ?? null
+          // 如果用户在预览页选了 eastmoney 候选但没建本地 holding，pendingNewHoldings 会有
+          const pending = t.detected_name ? pendingNewHoldings.get(t.detected_name) : null
+          if (!t.target_holding_id && pending) {
+            investExtras.new_holding_code = pending.code
+            investExtras.new_holding_name = pending.name
+            investExtras.new_holding_account_id = pending.account_id
+          }
+        }
+        return {
+          amount: t.amount,
+          type: t.type,
+          date: t.date,
+          description: t.description,
+          counterparty: t.counterparty,
+          category_id: t.category_id,
+          account_id: t.account_id ?? null,
+          to_account_id: t.to_account_id ?? null,
+          // 优先级：单条 > 批量 > null
+          member_id: t.member_id ?? batchMemberId ?? null,
+          // 合并批量标签 + 单条标签（去重）
+          tag_ids: [...new Set([...batchTagIds, ...t.tag_ids])],
+          // 钱迹原始标签名交给后端在 save 时建库
+          tag_names: t.tag_names,
+          // 报销字段（钱迹 parse 时自动填充，用户也可在预览页修改）
+          is_reimbursable: t.is_reimbursable,
+          reimbursable_amount: t.reimbursable_amount,
+          reimbursement_status: t.reimbursement_status,
+          external_id: t.external_id,
+          ...investExtras,
+        }
+      })
 
     const reimToSave = reimbursements
       .filter(r => selectedReimIdx.has(r.index))
@@ -398,6 +448,21 @@ export default function ImportPage() {
       return
     }
 
+    // 检查有没有投资交易未关联持仓（保存后份额不会更新）
+    const unresolvedInvest = transactions.filter(t =>
+      selectedIdx.has(t.index) &&
+      t.detected_action &&
+      !t.target_holding_id &&
+      !(t.detected_name && pendingNewHoldings.has(t.detected_name))
+    )
+    if (unresolvedInvest.length > 0) {
+      const names = unresolvedInvest.map(t => t.detected_name || '未知').join('、')
+      const ok = confirm(
+        `以下 ${unresolvedInvest.length} 笔投资交易未关联持仓，保存后不会自动更新份额：\n${names}\n\n继续保存（仅记转账），还是返回去选择持仓？\n\n点"确定"继续，点"取消"返回。`
+      )
+      if (!ok) return
+    }
+
     setSaving(true)
     try {
       const mappingsToSave: AccountMappingItem[] = Array.from(accountMappings.entries()).map(
@@ -407,7 +472,13 @@ export default function ImportPage() {
       const parts = [`交易 ${res.data.saved} 条`]
       if (res.data.reim_saved) parts.push(`报销记录 ${res.data.reim_saved} 条`)
       if (res.data.reim_linked) parts.push(`已关联原账单 ${res.data.reim_linked} 条`)
-      alert('成功导入：' + parts.join('，'))
+      if (res.data.holdings_created) parts.push(`新建持仓 ${res.data.holdings_created} 个`)
+      if (res.data.holdings_updated) parts.push(`持仓份额已更新 ${res.data.holdings_updated} 条`)
+      let msg = '成功导入：' + parts.join('，')
+      if (res.data.holdings_warnings?.length) {
+        msg += '\n\n⚠ 投资份额提示：\n' + res.data.holdings_warnings.join('\n')
+      }
+      alert(msg)
       navigate('/')
     } catch (err) {
       const error = err as { message?: string }
@@ -813,13 +884,137 @@ export default function ImportPage() {
                     )
                   })()}
 
+                  {/* 投资交易识别：橙色徽标 + holding 选择器 + 改回支出按钮 */}
+                  {t.type === 'transfer' && t.detected_action && (() => {
+                    const isBuy = t.detected_action === 'buy'
+                    const investAccounts = accounts.filter(a => a.category === '投资理财')
+                    const fundStockHoldings = holdings.filter(h => h.asset_type === 'fund' || h.asset_type === 'stock')
+                    const matchedHolding = t.target_holding_id ? holdings.find(h => h.id === t.target_holding_id) : null
+                    const pendingForName = t.detected_name ? pendingNewHoldings.get(t.detected_name) : null
+                    return (
+                      <div style={{ marginTop: 6, padding: '6px 8px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#9a3412', marginBottom: 4 }}>
+                          <span>{isBuy ? '📈' : '📉'}</span>
+                          <span style={{ fontWeight: 600 }}>{isBuy ? '投资买入' : '投资赎回'}</span>
+                          {t.detected_name && <span style={{ color: '#7c2d12' }}>· {t.detected_name}</span>}
+                          <button
+                            onClick={() => updateTxn(t.index, {
+                              type: 'expense',
+                              detected_action: '',
+                              target_holding_id: null,
+                              to_account_id: null,
+                            })}
+                            style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 6px', background: 'white', border: '1px solid #fed7aa', borderRadius: 4, color: '#9a3412', cursor: 'pointer' }}>
+                            改回普通支出
+                          </button>
+                        </div>
+                        {/* holding 选择器 */}
+                        {matchedHolding ? (
+                          <select
+                            value={t.target_holding_id ?? ''}
+                            onChange={e => {
+                              const hid = e.target.value ? parseInt(e.target.value) : null
+                              const h = hid ? holdings.find(x => x.id === hid) : null
+                              const investAcct = h?.account_id ?? null
+                              updateTxn(t.index, {
+                                target_holding_id: hid,
+                                ...(isBuy ? { to_account_id: investAcct } : { account_id: investAcct }),
+                              })
+                            }}
+                            style={{ width: '100%', padding: '4px 6px', fontSize: 12, border: '1px solid #34d399', borderRadius: 6, background: '#ecfdf5', color: '#065f46' }}>
+                            {fundStockHoldings.map(h => (
+                              <option key={h.id} value={h.id}>✓ {h.name} {h.code && `(${h.code})`}</option>
+                            ))}
+                          </select>
+                        ) : pendingForName ? (
+                          <div style={{ fontSize: 12, color: '#065f46', padding: '4px 6px', background: '#ecfdf5', border: '1px solid #34d399', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>✓ 将新建：{pendingForName.name} ({pendingForName.code})</span>
+                            <select
+                              value={pendingForName.account_id ?? ''}
+                              onChange={e => {
+                                const accId = e.target.value ? parseInt(e.target.value) : null
+                                if (!t.detected_name) return
+                                setPendingNewHoldings(prev => {
+                                  const next = new Map(prev)
+                                  next.set(t.detected_name, { ...pendingForName, account_id: accId })
+                                  return next
+                                })
+                                if (isBuy) updateTxn(t.index, { to_account_id: accId })
+                                else updateTxn(t.index, { account_id: accId })
+                              }}
+                              style={{ flex: 1, padding: '2px 4px', fontSize: 11, border: '1px solid #d1fae5', borderRadius: 4, background: 'white' }}>
+                              <option value="">绑定到投资账户</option>
+                              {investAccounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                            </select>
+                            <button
+                              onClick={() => {
+                                if (!t.detected_name) return
+                                setPendingNewHoldings(prev => {
+                                  const next = new Map(prev)
+                                  next.delete(t.detected_name)
+                                  return next
+                                })
+                              }}
+                              style={{ fontSize: 10, padding: '1px 4px', background: 'white', border: '1px solid #fca5a5', borderRadius: 4, color: '#b91c1c', cursor: 'pointer' }}>
+                              撤销
+                            </button>
+                          </div>
+                        ) : t.fund_search_candidates && t.fund_search_candidates.length > 0 ? (
+                          <select
+                            defaultValue=""
+                            onChange={e => {
+                              if (!e.target.value || !t.detected_name) return
+                              const cand = t.fund_search_candidates.find((c: FundCandidate) => c.code === e.target.value)
+                              if (!cand) return
+                              setPendingNewHoldings(prev => {
+                                const next = new Map(prev)
+                                next.set(t.detected_name, { code: cand.code, name: cand.name, account_id: investAccounts[0]?.id ?? null })
+                                return next
+                              })
+                              const defaultInvestAcct = investAccounts[0]?.id ?? null
+                              if (isBuy) updateTxn(t.index, { to_account_id: defaultInvestAcct })
+                              else updateTxn(t.index, { account_id: defaultInvestAcct })
+                            }}
+                            style={{ width: '100%', padding: '4px 6px', fontSize: 12, border: '1px solid #f59e0b', borderRadius: 6, background: '#fffbeb', color: '#92400e' }}>
+                            <option value="">⚠ 请确认基金（共 {t.fund_search_candidates.length} 个候选）</option>
+                            {t.fund_search_candidates.map((c: FundCandidate) => (
+                              <option key={c.code} value={c.code}>{c.code} - {c.name}</option>
+                            ))}
+                          </select>
+                        ) : fundStockHoldings.length > 0 ? (
+                          <select
+                            value={t.target_holding_id ?? ''}
+                            onChange={e => {
+                              const hid = e.target.value ? parseInt(e.target.value) : null
+                              const h = hid ? holdings.find(x => x.id === hid) : null
+                              const investAcct = h?.account_id ?? null
+                              updateTxn(t.index, {
+                                target_holding_id: hid,
+                                ...(isBuy ? { to_account_id: investAcct } : { account_id: investAcct }),
+                              })
+                            }}
+                            style={{ width: '100%', padding: '4px 6px', fontSize: 12, border: '1px dashed #f87171', borderRadius: 6, background: '#fef2f2', color: '#991b1b' }}>
+                            <option value="">无法识别，请手动选择持仓</option>
+                            {fundStockHoldings.map(h => (
+                              <option key={h.id} value={h.id}>{h.name} {h.code && `(${h.code})`}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: 11, color: '#991b1b', padding: '4px 6px', background: '#fef2f2', borderRadius: 4 }}>
+                            未找到候选，且本地无持仓，请先到投资页建仓后再导入
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+
                   {accounts.length > 0 && t.type === 'transfer' && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
                       <select
                         value={t.account_id ?? ''}
                         onChange={e => updateTxn(t.index, { account_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{ flex: 1, padding: '4px 6px', fontSize: 12, border: t.account_id ? '1px solid #6366f1' : '1px dashed #d1d5db', borderRadius: 6, background: t.account_id ? '#eef2ff' : '#f9fafb', color: t.account_id ? '#4338ca' : '#9ca3af' }}>
-                        <option value="">转出账户</option>
+                        <option value="">{t.detected_action === 'buy' ? '资金账户' : '转出账户'}</option>
                         {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
                       </select>
                       <span style={{ color: '#6366f1', fontSize: 14 }}>→</span>
@@ -827,7 +1022,7 @@ export default function ImportPage() {
                         value={t.to_account_id ?? ''}
                         onChange={e => updateTxn(t.index, { to_account_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{ flex: 1, padding: '4px 6px', fontSize: 12, border: t.to_account_id ? '1px solid #6366f1' : '1px dashed #d1d5db', borderRadius: 6, background: t.to_account_id ? '#eef2ff' : '#f9fafb', color: t.to_account_id ? '#4338ca' : '#9ca3af' }}>
-                        <option value="">转入账户</option>
+                        <option value="">{t.detected_action === 'sell' ? '资金账户' : '转入账户'}</option>
                         {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
                       </select>
                     </div>

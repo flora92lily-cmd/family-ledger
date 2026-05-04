@@ -1,5 +1,5 @@
 """持仓管理接口"""
-from datetime import datetime
+from datetime import datetime, date as Date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert as sa_insert, delete as sa_delete
@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
-from app.models import Holding, Tag, holding_tags
+from app.models import Holding, Tag, Transaction, holding_tags
 from app.price_service import fetch_price
 from app.schemas import TagBrief, FamilyMemberBrief
 
@@ -186,6 +186,79 @@ async def refresh_all_prices(db: AsyncSession = Depends(get_db)):
 
     await db.commit()
     return {"updated": updated, "failed": failed}
+
+
+class RedeemRequest(BaseModel):
+    """赎回请求：从 holding 卖出 shares_reduced 份，钱进 to_account_id。
+    自动拆账成 transfer（本金归位）+ income/expense（已实现盈亏）。"""
+    to_account_id: int
+    date: Date
+    received_amount: float            # 实际到账金额（含盈亏）
+    shares_reduced: float             # 赎回份额
+    record_pnl: bool = True           # 是否单独记一笔盈亏交易
+    pnl_category_id: Optional[int] = None  # 盈亏分类（用户在前端选）
+    note: str = ""
+
+
+@router.post("/{hid}/redeem")
+async def redeem_holding(hid: int, data: RedeemRequest, db: AsyncSession = Depends(get_db)):
+    """赎回持仓：自动拆 transfer + 已实现盈亏交易，更新 shares。"""
+    h = await db.get(Holding, hid)
+    if not h:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    if data.shares_reduced <= 0:
+        raise HTTPException(status_code=400, detail="赎回份额必须大于 0")
+    if data.shares_reduced > h.shares + 1e-6:
+        raise HTTPException(status_code=400, detail=f"赎回份额超出持仓 ({h.shares})")
+    if data.received_amount < 0:
+        raise HTTPException(status_code=400, detail="到账金额不能为负")
+    if not h.account_id:
+        raise HTTPException(status_code=400, detail="该持仓未绑定投资账户，无法赎回")
+
+    cost_basis = round(h.cost_price * data.shares_reduced, 2)
+    pnl = round(data.received_amount - cost_basis, 2)
+
+    txn_transfer = Transaction(
+        amount=cost_basis,
+        type="transfer",
+        description=f"赎回 {h.name}",
+        date=data.date,
+        source="manual",
+        account_id=h.account_id,
+        to_account_id=data.to_account_id,
+    )
+    db.add(txn_transfer)
+
+    pnl_txn_id: Optional[int] = None
+    if data.record_pnl and abs(pnl) > 0.005:
+        pnl_txn = Transaction(
+            amount=abs(pnl),
+            type="income" if pnl > 0 else "expense",
+            description=f"{h.name} 已实现{'盈利' if pnl > 0 else '亏损'}",
+            date=data.date,
+            source="manual",
+            account_id=data.to_account_id,
+            category_id=data.pnl_category_id,
+        )
+        db.add(pnl_txn)
+        await db.flush()
+        pnl_txn_id = pnl_txn.id
+
+    h.shares = round(h.shares - data.shares_reduced, 6)
+    if h.shares < 1e-6:
+        h.shares = 0
+    h.current_value = round(h.shares * h.current_price, 2)
+
+    await db.commit()
+
+    return {
+        "ok": True,
+        "cost_basis": cost_basis,
+        "pnl": pnl,
+        "transfer_amount": cost_basis,
+        "pnl_txn_id": pnl_txn_id,
+        "remaining_shares": h.shares,
+    }
 
 
 @router.get("/summary")
