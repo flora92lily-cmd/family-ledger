@@ -3,13 +3,17 @@
 基金：东方财富 fundgz 接口（盘中估值，收盘后返回最终净值）
 股票：腾讯财经 qt.gtimg.cn（A股，需传 sh600000 / sz000001 格式）
 理财：无自动接口，手动维护
+
+历史净值：东方财富 f10/lsjz（按日期范围）
+基金搜索：东方财富 fundsuggest.eastmoney.com（按名称反查代码）
 """
 import re
 import json
 import time
 import asyncio
+import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, date as Date, timedelta
 from typing import Optional
 
 
@@ -104,6 +108,78 @@ def _fetch_stock(code: str) -> dict:
         "name": parts[1],
         "price_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+
+
+def _fetch_fund_nav_on(code: str, target_date: Date) -> Optional[float]:
+    """查指定日期的基金净值。当日无（周末/节假日）时回退到前一个交易日。
+
+    给 7 天回看窗口，取最新一条 ≤ target_date 的净值。
+    """
+    end = target_date.strftime("%Y-%m-%d")
+    start = (target_date - timedelta(days=7)).strftime("%Y-%m-%d")
+    url = (
+        f"http://api.fund.eastmoney.com/f10/lsjz?fundCode={code}"
+        f"&pageIndex=1&pageSize=10&startDate={start}&endDate={end}"
+    )
+    headers = {**FUND_HEADERS, "Referer": f"http://fundf10.eastmoney.com/jjjz_{code}.html"}
+    req = urllib.request.Request(url, headers=headers)
+    text = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="replace")
+    payload = json.loads(text)
+    lst = (payload.get("Data") or {}).get("LSJZList") or []
+    for item in lst:
+        # lsjz 返回按日期降序
+        dwjz = item.get("DWJZ")
+        if dwjz:
+            try:
+                return float(dwjz)
+            except ValueError:
+                continue
+    return None
+
+
+async def fetch_fund_nav_on(code: str, target_date: Date) -> Optional[float]:
+    """异步入口（在线程池中执行同步网络请求）。失败返回 None。"""
+    if not code:
+        return None
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch_fund_nav_on, code, target_date)
+    except Exception:
+        return None
+
+
+def _search_fund_by_name(query: str) -> list[dict]:
+    """按基金名/简称反查代码。返回最多 5 条 [{code, name}]。"""
+    if not query:
+        return []
+    encoded = urllib.parse.quote(query)
+    url = (
+        f"https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
+        f"?m=1&key={encoded}"
+    )
+    headers = {**FUND_HEADERS, "Referer": "https://fund.eastmoney.com/"}
+    req = urllib.request.Request(url, headers=headers)
+    text = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="replace")
+    payload = json.loads(text)
+    datas = payload.get("Datas") or []
+    results = []
+    for item in datas[:5]:
+        code = item.get("CODE") or ""
+        name = item.get("NAME") or item.get("SHORTNAME") or ""
+        if code and name:
+            results.append({"code": code, "name": name})
+    return results
+
+
+async def search_fund_by_name(query: str) -> list[dict]:
+    """异步入口。失败返回空列表。"""
+    if not query:
+        return []
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _search_fund_by_name, query)
+    except Exception:
+        return []
 
 
 async def fetch_price(asset_type: str, code: str) -> Optional[dict]:

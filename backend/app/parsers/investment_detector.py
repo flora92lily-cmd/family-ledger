@@ -1,0 +1,100 @@
+"""识别一条 ParsedTransaction 是否为"投资买入/赎回"，并提取基金/股票名称。
+
+支付宝账单不含基金代码，只有名称（如"蚂蚁财富-天弘沪深300ETF联接C-买入"）。
+所以 detector 只负责提取名称 + 动作；代码反查由后端 parse_bill 处理。
+
+⚠️ A/C 类后缀必须保留（"联接C" 不能截断）。
+"""
+import re
+from dataclasses import dataclass
+from typing import Optional
+from app.parsers.base import ParsedTransaction
+
+
+@dataclass
+class InvestmentInfo:
+    action: str            # "buy" or "sell"
+    asset_type: str        # "fund" or "stock"
+    extracted_name: str    # 从描述里提取的基金/股票名
+    extracted_code: str = ""  # 仅当账单格式恰好包含 6 位代码时才填
+
+
+# 蚂蚁财富格式：'蚂蚁财富-{基金全名}-{动作}'
+# 动作支持中英文连字符
+_ALIPAY_ANT_PATTERN = re.compile(
+    r"^蚂蚁财富[\-—](.+?)[\-—](买入|卖出|定投|申购|赎回)\s*$"
+)
+
+_BUY_ACTIONS = {"买入", "定投", "申购"}
+_SELL_ACTIONS = {"卖出", "赎回"}
+
+
+def _detect_alipay(txn: ParsedTransaction) -> Optional[InvestmentInfo]:
+    """支付宝：counterparty 含'蚂蚁财富' + description 形如 蚂蚁财富-XX-买入"""
+    cp = txn.counterparty or ""
+    desc = txn.description or ""
+    if "蚂蚁财富" not in cp and "蚂蚁财富" not in desc:
+        return None
+
+    # description 是首选源
+    m = _ALIPAY_ANT_PATTERN.match(desc)
+    if not m:
+        # 有些版本的账单 counterparty=蚂蚁财富，description 只有基金名+动作
+        # 兜底匹配 "{name}-{action}" 或 "{name} 买入"
+        alt = re.match(r"^(.+?)[\-—](买入|卖出|定投|申购|赎回)\s*$", desc)
+        if alt:
+            name, action = alt.group(1).strip(), alt.group(2)
+        else:
+            return None
+    else:
+        name, action = m.group(1).strip(), m.group(2)
+
+    if not name:
+        return None
+
+    if action in _BUY_ACTIONS:
+        action_norm = "buy"
+    elif action in _SELL_ACTIONS:
+        action_norm = "sell"
+    else:
+        return None
+
+    # 暂统一识别为 fund（蚂蚁财富主要是基金；股票走券商，不会进支付宝账单）
+    return InvestmentInfo(action=action_norm, asset_type="fund", extracted_name=name)
+
+
+def _detect_bank_pdf(txn: ParsedTransaction) -> Optional[InvestmentInfo]:
+    """银行 PDF：description 含'证券交易'/'基金申购'/'基金赎回'。
+    名称提取困难，留空让用户在前端选择 holding。"""
+    desc = txn.description or ""
+    if "基金申购" in desc or "证券保证金转出" in desc or ("证券" in desc and "买入" in desc):
+        return InvestmentInfo(action="buy", asset_type="fund" if "基金" in desc else "stock", extracted_name="")
+    if "基金赎回" in desc or "证券保证金转入" in desc or ("证券" in desc and "卖出" in desc):
+        return InvestmentInfo(action="sell", asset_type="fund" if "基金" in desc else "stock", extracted_name="")
+    return None
+
+
+_DISPATCH = {
+    "alipay": _detect_alipay,
+    "bank_pdf": _detect_bank_pdf,
+}
+
+
+def detect_investment(txn: ParsedTransaction, source: str) -> Optional[InvestmentInfo]:
+    """各 source 走对应 detector，识别失败返回 None。"""
+    fn = _DISPATCH.get(source)
+    if not fn:
+        return None
+    return fn(txn)
+
+
+def apply_detection(txn: ParsedTransaction, source: str) -> None:
+    """在解析时调用：识别为投资 → 改 type=transfer，并写入 detected_* 字段。"""
+    info = detect_investment(txn, source)
+    if not info:
+        return
+    txn.type = "transfer"
+    txn.detected_action = info.action
+    txn.detected_asset_type = info.asset_type
+    txn.detected_name = info.extracted_name
+    txn.detected_code = info.extracted_code

@@ -201,6 +201,11 @@ export interface Account {
 }
 
 // === Parsed Import Transaction ===
+export interface FundCandidate {
+  code: string
+  name: string
+}
+
 export interface ParsedTransaction {
   index: number
   amount: number
@@ -224,6 +229,14 @@ export interface ParsedTransaction {
   reimbursement_status: ReimbursementStatus
   external_id: string
   default_unchecked: boolean
+  // 投资交易识别（detector + 后端预匹配/反查的结果）
+  detected_action: '' | 'buy' | 'sell'
+  detected_asset_type: '' | 'fund' | 'stock'
+  detected_name: string
+  detected_code: string
+  target_holding_id: number | null
+  target_holding_name: string | null
+  fund_search_candidates: FundCandidate[]
 }
 
 // === Parsed Import Reimbursement（钱迹类型=报销记录） ===
@@ -311,7 +324,15 @@ export const importApi = {
     reimbursements: Array<Record<string, unknown>> = [],
     account_mappings: AccountMappingItem[] = [],
   ) =>
-    api.post<{ saved: number; reim_saved: number; reim_linked: number; mappings_saved: number }>(
+    api.post<{
+      saved: number
+      reim_saved: number
+      reim_linked: number
+      mappings_saved: number
+      holdings_created: number
+      holdings_updated: number
+      holdings_warnings: string[]
+    }>(
       '/api/imports/save',
       { source, transactions, reimbursements, account_mappings }
     ),
@@ -372,6 +393,25 @@ export const reimbursementApi = {
     api.delete<{ ok: boolean; reverted_transactions: number }>(`/api/reimbursements/${id}`),
 }
 
+export interface RedeemInput {
+  to_account_id: number
+  date: string
+  received_amount: number
+  shares_reduced: number
+  record_pnl: boolean
+  pnl_category_id?: number | null
+  note?: string
+}
+
+export interface RedeemResult {
+  ok: boolean
+  cost_basis: number
+  pnl: number
+  transfer_amount: number
+  pnl_txn_id: number | null
+  remaining_shares: number
+}
+
 export const holdingApi = {
   list: () => api.get<Holding[]>('/api/holdings/'),
   summary: () => api.get<HoldingSummary>('/api/holdings/summary'),
@@ -380,6 +420,7 @@ export const holdingApi = {
   delete: (id: number) => api.delete(`/api/holdings/${id}`),
   refresh: (id: number) => api.post<Holding>(`/api/holdings/${id}/refresh`),
   refreshAll: () => api.post<{ updated: number; failed: Array<{ name: string; error: string }> }>('/api/holdings/refresh-all'),
+  redeem: (id: number, data: RedeemInput) => api.post<RedeemResult>(`/api/holdings/${id}/redeem`, data),
 }
 
 export interface AccountInput {

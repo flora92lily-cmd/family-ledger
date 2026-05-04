@@ -1,5 +1,17 @@
 import { useState, useEffect } from 'react'
-import { holdingApi, tagApi, accountApi, memberApi, type Holding, type HoldingSummary, type AssetType, type Tag, type Account, type FamilyMember } from '../api'
+import { holdingApi, tagApi, accountApi, memberApi, categoryApi, type Holding, type HoldingSummary, type AssetType, type Tag, type Account, type FamilyMember, type Category } from '../api'
+
+// 持仓类型 + 盈亏方向 → 默认分类名
+function defaultPnlCategoryName(asset_type: AssetType, pnl: number): string {
+  if (pnl >= 0) {
+    if (asset_type === 'fund') return '基金收益'
+    if (asset_type === 'stock') return '股票收益'
+    return '理财产品收益'
+  }
+  if (asset_type === 'fund') return '基金亏损'
+  if (asset_type === 'stock') return '股票亏损'
+  return '投资亏损'
+}
 
 const ASSET_LABELS: Record<AssetType, { label: string; icon: string }> = {
   fund: { label: '基金', icon: '📈' },
@@ -28,6 +40,20 @@ export default function InvestPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshingId, setRefreshingId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [categories, setCategories] = useState<Category[]>([])
+
+  // 赎回弹窗
+  const [redeemHolding, setRedeemHolding] = useState<Holding | null>(null)
+  const [redeemForm, setRedeemForm] = useState({
+    to_account_id: 0,
+    date: new Date().toISOString().slice(0, 10),
+    received_amount: 0,
+    shares_reduced: 0,
+    record_pnl: true,
+    pnl_category_id: null as number | null,
+    note: '',
+  })
+  const [redeeming, setRedeeming] = useState(false)
 
   const load = async () => {
     const [h, s] = await Promise.all([holdingApi.list(), holdingApi.summary()])
@@ -40,6 +66,7 @@ export default function InvestPage() {
     tagApi.list({ include_archived: false }).then(r => setTags(r.data))
     accountApi.list().then(r => setAccounts(r.data))
     memberApi.list().then(r => setMembers(r.data))
+    categoryApi.list().then(r => setCategories(r.data))
   }, [])
 
   const openAdd = () => {
@@ -78,6 +105,60 @@ export default function InvestPage() {
       alert('保存失败，请重试')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const openRedeem = (h: Holding) => {
+    if (h.shares <= 0) {
+      alert('该持仓份额为 0，无法赎回。\n\n如果你已通过导入账单买入，请确认预览页有选择对应持仓（橙色"📈 投资买入"区域）；或到本页编辑持仓手动填入份额。')
+      return
+    }
+    if (!h.account_id) {
+      alert('该持仓未绑定投资账户，请先编辑持仓绑定账户后再赎回')
+      return
+    }
+    const cashAccounts = accounts.filter(a => a.category !== '投资理财')
+    setRedeemHolding(h)
+    setRedeemForm({
+      to_account_id: cashAccounts[0]?.id ?? 0,
+      date: new Date().toISOString().slice(0, 10),
+      received_amount: 0,
+      shares_reduced: 0,
+      record_pnl: true,
+      pnl_category_id: null,
+      note: '',
+    })
+  }
+
+  const handleRedeem = async (pnlCategoryIdOverride?: number | null) => {
+    if (!redeemHolding) return
+    if (redeemForm.shares_reduced <= 0) return alert('请输入赎回份额')
+    if (redeemForm.shares_reduced > redeemHolding.shares + 1e-6) return alert(`赎回份额超出持仓 ${redeemHolding.shares}`)
+    if (redeemForm.received_amount <= 0) return alert('请输入到账金额')
+    if (!redeemForm.to_account_id) return alert('请选择到账账户')
+
+    const pnlCatId = pnlCategoryIdOverride !== undefined ? pnlCategoryIdOverride : redeemForm.pnl_category_id
+
+    setRedeeming(true)
+    try {
+      const res = await holdingApi.redeem(redeemHolding.id, {
+        to_account_id: redeemForm.to_account_id,
+        date: redeemForm.date,
+        received_amount: redeemForm.received_amount,
+        shares_reduced: redeemForm.shares_reduced,
+        record_pnl: redeemForm.record_pnl,
+        pnl_category_id: pnlCatId,
+        note: redeemForm.note,
+      })
+      const { cost_basis, pnl, remaining_shares } = res.data
+      alert(`赎回成功\n成本：¥${cost_basis.toFixed(2)}\n盈亏：${pnl >= 0 ? '+' : ''}¥${pnl.toFixed(2)}\n剩余份额：${remaining_shares}`)
+      setRedeemHolding(null)
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      alert('赎回失败：' + (err.response?.data?.detail || '请重试'))
+    } finally {
+      setRedeeming(false)
     }
   }
 
@@ -230,6 +311,10 @@ export default function InvestPage() {
                     {refreshingId === h.id ? '更新中…' : '刷新行情'}
                   </button>
                 )}
+                <button onClick={() => openRedeem(h)}
+                  style={{ flex: 1, padding: '5px 0', fontSize: 12, background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe', borderRadius: 6, cursor: 'pointer' }}>
+                  赎回
+                </button>
                 <button onClick={() => handleDelete(h)}
                   style={{ padding: '5px 10px', fontSize: 12, background: '#fff1f2', color: '#ef4444', border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer' }}>
                   删除
@@ -241,6 +326,111 @@ export default function InvestPage() {
 
         <div style={{ height: 80 }} />
       </div>
+
+      {/* 赎回弹窗 */}
+      {redeemHolding && (() => {
+        const cashAccounts = accounts.filter(a => a.category !== '投资理财')
+        const costBasis = +(redeemHolding.cost_price * redeemForm.shares_reduced).toFixed(2)
+        const pnl = +(redeemForm.received_amount - costBasis).toFixed(2)
+        const pnlType: 'expense' | 'income' = pnl >= 0 ? 'income' : 'expense'
+        const candidateCats = categories.filter(c => c.type === pnlType && c.parent_id !== null)
+        const defaultName = defaultPnlCategoryName(redeemHolding.asset_type, pnl)
+        const effectivePnlCatId =
+          redeemForm.pnl_category_id ??
+          candidateCats.find(c => c.name === defaultName)?.id ??
+          candidateCats[0]?.id ??
+          null
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-end' }}>
+            <div style={{ width: '100%', background: 'white', borderRadius: '20px 20px 0 0', padding: 20, maxHeight: '90vh', overflowY: 'auto' }}>
+              <div style={{ fontWeight: 600, fontSize: 17, marginBottom: 4, textAlign: 'center' }}>
+                赎回「{redeemHolding.name}」
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginBottom: 16 }}>
+                当前持仓 {redeemHolding.shares} 份 · 成本 ¥{redeemHolding.cost_price.toFixed(4)}
+              </div>
+
+              <label style={labelStyle}>到账日期 *</label>
+              <input style={inputStyle} type="date"
+                value={redeemForm.date}
+                onChange={e => setRedeemForm(f => ({ ...f, date: e.target.value }))} />
+
+              <label style={labelStyle}>到账账户 *</label>
+              <select
+                value={redeemForm.to_account_id || ''}
+                onChange={e => setRedeemForm(f => ({ ...f, to_account_id: parseInt(e.target.value) || 0 }))}
+                style={{ ...inputStyle, padding: '9px 12px' }}>
+                <option value="">请选择</option>
+                {cashAccounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+                ))}
+              </select>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>赎回份额 *</label>
+                  <input style={inputStyle} type="number" step="0.01" placeholder="0"
+                    value={redeemForm.shares_reduced || ''}
+                    onChange={e => setRedeemForm(f => ({ ...f, shares_reduced: parseFloat(e.target.value) || 0 }))} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>到账金额（元）*</label>
+                  <input style={inputStyle} type="number" step="0.01" placeholder="0"
+                    value={redeemForm.received_amount || ''}
+                    onChange={e => setRedeemForm(f => ({ ...f, received_amount: parseFloat(e.target.value) || 0 }))} />
+                </div>
+              </div>
+
+              {redeemForm.shares_reduced > 0 && (
+                <div style={{ background: '#f9fafb', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#6b7280' }}>成本基础</span>
+                    <span>¥{costBasis.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#6b7280' }}>已实现盈亏</span>
+                    <span style={{ color: pnl >= 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>
+                      {pnl >= 0 ? '+' : ''}¥{pnl.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {redeemForm.shares_reduced > 0 && Math.abs(pnl) > 0.005 && (
+                <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, marginBottom: 8, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={redeemForm.record_pnl}
+                      onChange={e => setRedeemForm(f => ({ ...f, record_pnl: e.target.checked }))} />
+                    <span>记一笔盈亏到分类（{pnl >= 0 ? '收入' : '支出'}）</span>
+                  </label>
+                  {redeemForm.record_pnl && (
+                    <select
+                      value={effectivePnlCatId || ''}
+                      onChange={e => setRedeemForm(f => ({ ...f, pnl_category_id: parseInt(e.target.value) || null }))}
+                      style={{ ...inputStyle, padding: '9px 12px' }}>
+                      {candidateCats.length === 0 && <option value="">无可用分类</option>}
+                      {candidateCats.map(c => (
+                        <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                <button onClick={() => setRedeemHolding(null)}
+                  style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
+                  取消
+                </button>
+                <button onClick={() => handleRedeem(effectivePnlCatId)} disabled={redeeming}
+                  style={{ flex: 1, padding: 12, borderRadius: 10, border: 'none', background: '#7c3aed', color: 'white', fontSize: 15, fontWeight: 600, cursor: redeeming ? 'not-allowed' : 'pointer', opacity: redeeming ? 0.6 : 1 }}>
+                  {redeeming ? '提交中…' : '确认赎回'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* 编辑/添加弹窗 */}
       {showModal && (

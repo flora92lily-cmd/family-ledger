@@ -7,6 +7,7 @@ import csv
 import io
 from datetime import datetime, date
 from app.parsers.base import BaseParser, ParsedTransaction
+from app.parsers.investment_detector import apply_detection
 
 
 class AlipayParser(BaseParser):
@@ -46,6 +47,10 @@ class AlipayParser(BaseParser):
                     transactions.append(txn)
             except (ValueError, IndexError):
                 continue
+
+        # 投资交易识别（蚂蚁财富基金买入/赎回 → 改成 transfer）
+        for t in transactions:
+            apply_detection(t, "alipay")
 
         return transactions
 

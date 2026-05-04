@@ -17,6 +17,7 @@ import io
 from datetime import date
 import pdfplumber
 from app.parsers.base import BaseParser, ParsedTransaction
+from app.parsers.investment_detector import apply_detection
 
 
 DATE_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$")
@@ -140,6 +141,13 @@ class BankPdfParser(BaseParser):
                     raw=f"{date_str} {amount_str} {summary} {counterparty}"[:200],
                 )
             )
+
+        # 投资交易识别（基金申购/赎回 / 证券交易 → 改 type=transfer）
+        for t in transactions:
+            # 已经识别为 transfer（如信用卡还款）的不再覆盖
+            if t.type == "transfer":
+                continue
+            apply_detection(t, "bank_pdf")
 
         return transactions
 

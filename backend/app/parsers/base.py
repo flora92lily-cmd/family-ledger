@@ -33,6 +33,13 @@ class ParsedTransaction:
     # 解析时建议默认不勾选（如支付宝"不计收支"且非余额宝转入），前端初始勾选时排除
     default_unchecked: bool = False
 
+    # 投资交易识别（detector 在解析阶段标注，后端 parse_bill 后处理 + save 阶段使用）
+    detected_action: str = ""           # "buy" / "sell" / ""
+    detected_asset_type: str = ""       # "fund" / "stock" / ""
+    detected_name: str = ""             # 提取的基金/股票名称
+    detected_code: str = ""             # 提取的代码（很多账单没有，留空）
+    target_holding_id: Optional[int] = None  # parse 阶段后端按名称匹配本地 holdings 后预填
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["date"] = self.date.isoformat()

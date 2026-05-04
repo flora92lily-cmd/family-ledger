@@ -74,13 +74,20 @@ async def _with_current_balance(accounts: list[Account], db: AsyncSession) -> li
 
     result = []
     for a in accounts:
+        # 投资理财账户：余额 = 持仓市值（不累加 transfer 流水/初始余额，
+        # 因为转入的现金会立刻形成持仓成本，让 holding_value 接住即可，
+        # 否则会在 "transfer 流水 + 持仓市值" 处双倍计算）
+        if a.category == "投资理财":
+            cb = round(holding_value[a.id], 2)
+        else:
+            cb = round(a.balance + delta[a.id] + holding_value[a.id], 2)
         d = {
             "id": a.id,
             "name": a.name,
             "icon": a.icon,
             "category": a.category,
             "balance": a.balance,
-            "current_balance": round(a.balance + delta[a.id] + holding_value[a.id], 2),
+            "current_balance": cb,
             "member_id": a.member_id,
             "note": a.note,
             "sort_order": a.sort_order,
