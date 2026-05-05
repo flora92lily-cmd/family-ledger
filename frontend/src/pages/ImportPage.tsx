@@ -40,6 +40,7 @@ const SOURCE_FALLBACK: Record<string, string[]> = {
   alipay: ['支付宝'],
   wechat: ['微信'],
   bank_pdf: ['招行', '招商'],
+  jd: ['京东'],
 }
 
 function autoMatchAccount(paymentMethod: string, accounts: Account[]): number | null {
@@ -60,6 +61,7 @@ const SOURCES = [
   { value: 'wechat', label: '微信支付', icon: '💚', desc: '从微信支付导出的 CSV 账单' },
   { value: 'bank_pdf', label: '银行账单', icon: '🏦', desc: '招商银行流水 PDF' },
   { value: 'qianji', label: '钱迹', icon: '📒', desc: '钱迹 App 导出的 CSV 账本' },
+  { value: 'jd', label: '京东', icon: '🛒', desc: '京东交易流水 CSV' },
   { value: 'generic', label: '通用 CSV', icon: '📋', desc: '其他记账软件导出的 CSV/Excel' },
 ]
 

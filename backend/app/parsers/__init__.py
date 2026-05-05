@@ -8,12 +8,14 @@ from app.parsers.wechat import WechatParser
 from app.parsers.generic_csv import GenericCsvParser
 from app.parsers.bank_pdf import BankPdfParser
 from app.parsers.qianji import QianjiParser
+from app.parsers.jd import JdParser
 
 PARSERS = {
     "alipay": AlipayParser(),
     "wechat": WechatParser(),
     "bank_pdf": BankPdfParser(),
     "qianji": QianjiParser(),
+    "jd": JdParser(),
     "generic": GenericCsvParser(),
 }
 
