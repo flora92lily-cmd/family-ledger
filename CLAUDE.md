@@ -52,8 +52,10 @@ backend/
                            #   init_db 步骤②兜底表含 payment_method_mappings
     models.py              # SQLAlchemy ORM: TagCategory, Tag, transaction_tags/account_tags/holding_tags,
                            #   FamilyMember(保留备用), Category, Transaction, Account, Holding,
-                           #   ReimbursementRecord, reimbursement_items, PaymentMethodMapping
-    schemas.py             # Pydantic v2 request/response models（含 TagCategoryOut/TagOut/TagBrief）
+                           #   ReimbursementRecord, reimbursement_items, PaymentMethodMapping,
+                           #   RecurringRule, RecurringExecution
+    schemas.py             # Pydantic v2 request/response models（含 TagCategoryOut/TagOut/TagBrief/
+                           #   RecurringRuleCreate/Update/Out/RecurringExecutionOut）
                            #   ⚠️ 字段名与类型名同名冲突：用 `from datetime import date as Date` alias 规避
                            #      例：ReimbursementItemOut.date 字段 type 写 Optional[Date] 而非 Optional[date]
     seed.py                # 默认分类（两层树：14 个支出父类 + 6 个收入父类，按用户自定义结构）
@@ -83,6 +85,8 @@ backend/
                            #   save 投资买入：fetch_fund_nav_on 查账单日净值 → 更新 shares/cost_price（加权平均）
                            #   save 当场建仓：target_holding_id 为空但 new_holding_code 非空时先建 Holding
       reimbursements.py    # /api/reimbursements/ CRUD：pending list / create / delete(revoke)
+      recurring.py         # /api/recurring-rules/ CRUD + executions 查询
+                           #   POST/PATCH 创建/修改规则后立即检查今天是否匹配，匹配则当场生成首笔交易
     parsers/
       base.py              # ParsedTransaction dataclass（含 payment_method/tags/source_category_name/
                            #   source_parent_category_name），BaseParser ABC。Transaction 已无 note 字段
@@ -110,6 +114,7 @@ frontend/src/
   api.ts                   # Axios client, all TypeScript interfaces, all API call functions
                            #   含 TagCategory / Tag / TagBrief；tagApi 完整 CRUD
   App.tsx                  # React Router routes + TabBar (5 tabs: 首页/统计/+/投资/设置)
+                           #   /recurring 等二级页面隐藏 TabBar
   pages/
     HomePage.tsx           # Monthly summary + transaction list + detail bottom sheet
                            #   列表：左 icon | 中（分类名 / 备注·成员）| 右（金额 / 账户）
@@ -122,7 +127,7 @@ frontend/src/
                            #   RedeemModal：输入到账日期/账户/金额/份额，实时显示成本基础和盈亏，
                            #   勾选"记盈亏"时选对应收入/支出分类（默认"基金收益"/"基金亏损"等）
     SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（账户支持标签）+ 分类管理
-                           #   + 导入账单入口 + 报销管理入口（导航到 /reimbursements）
+                           #   + 导入账单入口 + 报销管理入口 + 分类管理入口 + 周期记账入口
     ImportPage.tsx         # 三步流程：select（上传）→ mapping（账户映射）→ preview（预览确认）→ save
                            #   mapping step：列出账单 distinct payment_method，每行选对应 APP 账户；
                            #     后端已记忆的项显示"已记忆"徽标，首次出现显示"新"；
@@ -139,6 +144,9 @@ frontend/src/
     ReimbursementPage.tsx  # 报销管理（/reimbursements）：未报/已报/全部 三 tab
                            #   未报：勾选多笔 → 批量提交弹层（日期/账户/实收金额/备注）→ 创建 ReimbursementRecord
                            #   已报：列表 + 点开详情 → 显示关联原账单 + 撤销按钮
+    RecurringPage.tsx     # 周期记账（/recurring）：规则列表卡片 + 新增/编辑底部弹窗
+                           #   字段：类型/分类/账户/金额/周期(每周/每月)/开始日期/结束方式/成员/标签
+                           #   样式：form-page + page-header + back-btn，对齐 CategoryPage
 ```
 
 ### Key patterns
@@ -186,6 +194,16 @@ frontend/src/
 - **Price service**: Synchronous HTTP calls wrapped in `asyncio.run_in_executor`. Fund: eastmoney f10/lsjz；Stock: Tencent qt.gtimg.cn（600xxx→sh, 000xxx/300xxx→sz）。
 - **Async relationship loading**: READ 时用 `selectinload()`；WRITE 时直接操作关联表（见上方标签系统说明）。
 
+#### 周期记账系统
+- **RecurringRule**：循环交易规则，字段含 `recurrence_type`（weekly/monthly）、`recurrence_day`（1-7 或 1-31）、`start_date`、`end_type`（never/date/count）、`end_date`、`max_count`、`executed_count`、`is_active`，以及交易模板字段（type/category_id/account_id/to_account_id/amount/member_id/description/tag_ids_json）
+- **RecurringExecution**：记录每次循环生成的交易（rule_id + target_date + transaction_id），UNIQUE(rule_id, date) 防重复
+- **调度**：每天 00:05（Asia/Shanghai）`process_recurring_rules()` 扫描活跃规则 → 匹配 `_matches_today()` → 去重 → 创建 Transaction（source="recurring"）+ RecurringExecution → 更新 executed_count
+- **即时执行**：POST/PATCH 创建/修改规则时，如果当天满足条件，**立即生成**首笔交易（不等调度器）
+- **开机补漏**：`startup_backfill_recurring()` 在 lifespan 中 `asyncio.create_task` 后台运行
+- **修改只影响未来**：已生成的 Transaction 是独立记录，修改规则不会回溯修改历史账单
+- **月底短月处理**：monthly recurrence_day=31 在 2/4/6/9/11 月自动跳过（`calendar.monthrange` 判断）
+- **生成交易与手动无区别**：均可编辑、删除、参与统计，仅 `source="recurring"` 标记来源
+
 #### 报销系统
 - **Transaction 新增字段**：`is_reimbursable: bool`、`reimbursable_amount: float`、`reimbursement_status: str`（none/pending/done）、`external_id: str`（钱迹行 ID，跨次导入去重 + 关联）
 - **ReimbursementRecord**：报销到账记录，字段 date/to_account_id/total_amount/note/source/external_id
@@ -205,6 +223,9 @@ frontend/src/
 - ReimbursementRecord → Account (FK via to_account_id，到账账户)
 - Tag → TagCategory (FK)
 - Category → Category (self-referential via parent_id, no ORM relationship — tree built in router)
+- RecurringRule → Category (FK), RecurringRule → Account (FK via account_id), RecurringRule → Account (FK via to_account_id), RecurringRule → FamilyMember (FK)
+- RecurringRule → RecurringExecution (one-to-many, CASCADE DELETE)
+- RecurringExecution → Transaction (FK via transaction_id, ON DELETE SET NULL)
 - **FamilyMember 已恢复为一等模型**：`/api/members/` CRUD 可用；Transaction/Account/Holding 通过 `member_id` 直接关联（不走标签系统）；HomePage 列表显示家庭成员就读 `txn.member`。`database.py:_migrate_members_to_tags()` 仅作历史调试用，已不再调用
 
 ## 部署前提（影响设计决策）
@@ -243,6 +264,7 @@ frontend/src/
 - ~~**需求9 导入完善**~~ — 9.3 支付宝商品说明已存 description（无需改动）；9.4 微信 description="交易对方，商品" 智能拼接；9.5 支付宝不计收支三档：交易关闭/退款跳过、含"余额宝"→income、其他→expense+`default_unchecked`默认不勾选；9.6 微信收/支="/" 且含"零钱通"→type=transfer，方向按"存入/转入"vs"转出"判断；ImportPage transfer 行渲染双账户选择器（紫色→分隔）+ 自动匹配零钱通账户；ParsedTransaction 新增 `default_unchecked` 字段，前端初始勾选时排除并加"需确认"徽标
 - ~~**导入账户映射记忆**~~ — 新增 `payment_method_mappings` 表（source+raw_name 唯一）；导入流程扩展为三步：上传→账户映射→预览；parse 返回历史映射并预填 account_id；mapping step 列出 distinct payment_method，已记忆项自动预选（全部已记忆时跳过此步）；save 时 upsert 映射；updateMapping() 批量同步同支付方式的所有非转账交易
 - ~~**投资转账模型 + 自动算份额 + 赎回**~~ — 投资理财账户 current_balance 公式修复（仅取持仓市值）；investment_detector 识别蚂蚁财富买入/赎回→type=transfer；parse 后处理本地名称匹配+Eastmoney反查；save 查账单日历史净值算份额（加权均价）；holdings 新增 redeem 端点；ImportPage 橙色 badge + 持仓选择器 + 保存前校验 + 保存后反馈；InvestPage 赎回按钮 + RedeemModal；seed 新增投资盈亏分类
+- ~~**周期记账规则**~~ — RecurringRule + RecurringExecution 模型；每周/每月循环 + 永不/日期/次数结束方式；每天 00:05 定时生成 Transaction（source="recurring"）；创建/修改时当天匹配立即执行；SettingsPage 导航卡片 → /recurring 独立页（RecurringPage.tsx）；修改规则只影响未来生成的账单
 
 ### 🔙 回滚
 
