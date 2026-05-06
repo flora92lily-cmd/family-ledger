@@ -61,30 +61,47 @@ backend/
                            #   钱迹按分类名直接匹配，不依赖关键词
                            #   兜底：其他支出（顶层叶子）/ 其他收入（"退款报销"子分类）
     price_service.py       # Fund prices (eastmoney f10/lsjz), A-share prices (Tencent qt.gtimg.cn)
+                           #   新增：fetch_fund_nav_on(code, date) 查历史净值（7 天窗口兜底非交易日）
+                           #         search_fund_by_name(query) 按名称反查基金代码（Eastmoney fundsuggest）
     routers/
       tags.py              # /api/tags/categories CRUD + /api/tags/ CRUD + /archive /unarchive /move /delete
       categories.py        # /api/categories/ flat + /tree endpoint, supports parent_id
       transactions.py      # /api/transactions/ list + GET/{id}（编辑页用）+ POST + PATCH + DELETE
                            #   /summary/monthly, /summary/category（支持 tag_id 筛选）
       accounts.py          # /api/accounts/ CRUD, current_balance computed from linked transactions + holdings
+                           #   ⚠️ 投资理财账户特殊处理：current_balance = sum(holdings.current_value)，
+                           #   不加 balance + delta，防止 transfer 流水与持仓市值双计
       holdings.py          # /api/holdings/ CRUD + /refresh, /refresh-all, /summary
+                           #   新增 POST /{id}/redeem：拆出 transfer(成本) + income/expense(盈亏) 两笔交易，
+                           #   减少对应份额；盈亏分类由调用方传 pnl_category_id
       imports.py           # /api/imports/parse (file upload), /save (batch insert, save 时才创建新标签)
                            #   parse 末尾聚合 distinct payment_method，查 payment_method_mappings 历史映射，
                            #   返回 account_mappings 列表（raw_name + account_id）并预填 ParsedTxnOut.account_id
+                           #   parse 投资后处理：本地 holdings 名称 substring 匹配 → 未命中时 Eastmoney 反查候选
                            #   save 末尾 upsert payment_method_mappings（account_id=None 的项跳过不写）
                            #   save 同时接收 reimbursements 列表，按 external_id 跨批次关联原账单
+                           #   save 投资买入：fetch_fund_nav_on 查账单日净值 → 更新 shares/cost_price（加权平均）
+                           #   save 当场建仓：target_holding_id 为空但 new_holding_code 非空时先建 Holding
       reimbursements.py    # /api/reimbursements/ CRUD：pending list / create / delete(revoke)
     parsers/
       base.py              # ParsedTransaction dataclass（含 payment_method/tags/source_category_name/
                            #   source_parent_category_name），BaseParser ABC。Transaction 已无 note 字段
+                           #   新增投资字段：detected_action("buy"/"sell"/""）、detected_asset_type、
+                           #   detected_name（基金名）、detected_code、target_holding_id
       alipay.py            # Alipay CSV (GBK encoding), extracts 收/付款方式
+                           #   解析后调用 apply_detection(t, "alipay")：蚂蚁财富买入/赎回 → type=transfer
       wechat.py            # WeChat xlsx (openpyxl, header at row 16), extracts 支付方式
       bank_pdf.py          # CMB bank PDF (pdfplumber word-level coordinate extraction)
+                           #   解析后调用 apply_detection(t, "bank_pdf")：基金申购/赎回关键词识别
       qianji.py            # Qianji app CSV (UTF-8 BOM)；description=备注列（首页直接显示），
                            #   分类名走 source_category_name/source_parent_category_name 由 categorizer 直接按名匹配
                            #   类型=报销 → expense+is_reimbursable；类型=报销记录 → ParsedReimbursement
       generic_csv.py       # Fallback CSV parser
       categorizer.py       # 优先级：source_category_name 直接按名匹配 → Category.keywords 关键词 → 兜底其他支出/收入
+      investment_detector.py  # 识别投资买入/赎回：detect_investment() 各 source 各自规则；
+                           #   apply_detection() 原地修改 ParsedTransaction（type→transfer，写 detected_* 字段）
+                           #   支付宝规则：counterparty/description 含"蚂蚁财富" + regex 提取基金名+动作
+                           #   ⚠️ A/C 类后缀必须保留（"联接C" ≠ "联接A"，不同基金代码）
 ```
 
 ### Frontend structure
@@ -101,6 +118,9 @@ frontend/src/
                            #   备注→description，无独立 note 字段，标签多选
     StatsPage.tsx          # Category breakdown + monthly trend table
     InvestPage.tsx         # Investment holdings, price refresh, add/edit modal（持仓支持标签）
+                           #   每张持仓卡增加「赎回」按钮（shares=0 时点击弹提示，不 disabled）
+                           #   RedeemModal：输入到账日期/账户/金额/份额，实时显示成本基础和盈亏，
+                           #   勾选"记盈亏"时选对应收入/支出分类（默认"基金收益"/"基金亏损"等）
     SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（账户支持标签）+ 分类管理
                            #   + 导入账单入口 + 报销管理入口（导航到 /reimbursements）
     ImportPage.tsx         # 三步流程：select（上传）→ mapping（账户映射）→ preview（预览确认）→ save
@@ -112,6 +132,10 @@ frontend/src/
                            #   批量标签：选中即实时显示，取消即实时移除（虚拟叠加模式）
                            #   钱迹标签：绿色 tag_names 字符串展示，save 时后端才落库
                            #   钱迹报销：预览页底部独立分组显示"报销到账记录"，save 时一并提交
+                           #   投资交易：detected_action 非空时显示橙色"📈/📉"badge + 持仓选择器
+                           #     三种状态：本地命中（绿色 chip）/ Eastmoney 候选（黄色下拉）/ 无候选（红色警告）
+                           #     保存前校验：有未关联持仓的投资交易时弹 confirm 提示
+                           #     保存后 alert 显示 holdings_updated/holdings_created/holdings_warnings
     ReimbursementPage.tsx  # 报销管理（/reimbursements）：未报/已报/全部 三 tab
                            #   未报：勾选多笔 → 批量提交弹层（日期/账户/实收金额/备注）→ 创建 ReimbursementRecord
                            #   已报：列表 + 点开详情 → 显示关联原账单 + 撤销按钮
@@ -140,13 +164,22 @@ frontend/src/
 - 表 `payment_method_mappings`：字段 `source`（alipay/wechat/bank_pdf/qianji/generic） + `raw_name`（原始账户名，bank_pdf 用空字符串 `""`）+ `account_id`，UNIQUE(source, raw_name)
 - **按 source 区分**：同名字符串在不同来源语义可能不同（如"零钱"在微信 vs 钱迹），独立映射避免污染
 - **空 payment_method**：bank_pdf 等无支付方式的账单，统一用 `""` 作 key，前端渲染为"📄 整本账单（未标注支付方式）"
-- **转账交易**：不进入映射逻辑（type='transfer' 跳过），保留原有双账户启发式
+- **普通转账**：type='transfer' 且 detected_action 为空时跳过映射（双账户由启发式处理）
+- **投资转账**：type='transfer' 且 detected_action 非空时**纳入映射**（FROM 端是资金账户，需要 payment_method→account_id 映射）
 - **账户删除**：`ON DELETE SET NULL`，下次 parse 时该 raw_name 的映射 account_id 返回 None，显示"未关联"
+
+#### 投资账户模型
+- **投资理财账户 current_balance**：`= sum(绑定持仓的 current_value)`，**不**加 `balance + 流水 delta`。原因：transfer 买入后资金逻辑上立刻变成持仓成本，由持仓市值接管，两者叠加会双计。
+- **买入**：`type=transfer`，资金账户 → 投资理财账户；save 时查账单日历史净值自动算份额（加权平均 cost_price）
+- **赎回/卖出**：`type=transfer`，投资理财账户 → 资金账户（成本部分）+ 盈亏记 income/expense
+- **基金代码识别**：账单（支付宝）只有名称，无代码。流程：① 本地 holdings 名称 substring 匹配；② 未命中则 Eastmoney fundsuggest 反查候选（最多 5 条）；③ 用户在预览页确认后当场建仓（new_holding_code 传给 save 端）
+- **股票份额**：本轮不自动算（腾讯接口无法查历史价）；识别为 transfer 但份额由用户事后手动调整
+- **seed 分类**：income 新增「基金收益」「股票收益」「理财产品收益」；expense 新增「基金亏损」「股票亏损」「投资亏损」
 
 #### 其他模式
 - **Categories are hierarchical**: `parent_id` enables two-level nesting. `/api/categories/tree` returns tree structure; flat `/api/categories/` used for dropdowns.
 - **Transaction types**: `expense` / `income` / `transfer`. Transfer records both `account_id` (from) and `to_account_id` (to).
-- **Account balance**: `Account.balance` is the user-set initial balance. `AccountOut.current_balance` is dynamically computed: `initial_balance ± transactions + 绑定持仓市值（投资理财账户）`.
+- **Account balance**: `Account.balance` is the user-set initial balance. `AccountOut.current_balance` 动态计算，分两种情况：普通账户 = `balance + 流水 delta + 报销到账`；**投资理财账户** = `sum(绑定持仓市值)`（不加流水 delta，见"投资账户模型"章节）。
 - **AddPage 记账/编辑**：只有一个"备注（可选）"输入，映射到 `description` 字段（用于列表显示）。**Transaction.note 字段已删除**，所有账单备注统一存 `description`（手动 + 导入）。Account/Holding/ReimbursementRecord 的 `note` 字段保留（设置页/投资页/报销页仍在用）。
 - **Smart categorization**：分三级优先：(1) ParsedTransaction 的 `source_category_name` / `source_parent_category_name` 在 Category 表里按 type+name 直接查（钱迹走这条）；(2) `Category.keywords` 关键词匹配 description + counterparty；(3) 兜底"其他支出"/"其他收入"。导入时如果 ParsedTransaction.category_id 已被解析阶段设过，categorizer 不会覆盖。
 - **DB migration**: `database.py:init_db()` 分三步：① `Base.metadata.create_all`（新表）→ ② `CREATE TABLE IF NOT EXISTS` 显式兜底（防止旧 DB 漏建新表，目前含 `reimbursement_records` / `reimbursement_items` / `payment_method_mappings`）→ ③ `ALTER TABLE ADD COLUMN` + try/except 增量加列。`_migrate_members_to_tags()` 将旧 FamilyMember 数据迁移到 TagCategory/Tag（幂等，tag_categories 表非空时跳过）。
@@ -209,6 +242,7 @@ frontend/src/
 - ~~**需求8：报销管理模块**~~ — Transaction 新增报销字段；ReimbursementRecord + reimbursement_items 表；/api/reimbursements/ CRUD；统计剔除可报销支出；账户余额联动到账金额；钱迹 CSV 解析报销/报销记录类型；导入预览页显示报销类账单 + 报销到账记录；AddPage 可报销开关；ReimbursementPage（未报/已报/批量提交/撤销）；SettingsPage 入口；HomePage 状态 pill + 详情卡
 - ~~**需求9 导入完善**~~ — 9.3 支付宝商品说明已存 description（无需改动）；9.4 微信 description="交易对方，商品" 智能拼接；9.5 支付宝不计收支三档：交易关闭/退款跳过、含"余额宝"→income、其他→expense+`default_unchecked`默认不勾选；9.6 微信收/支="/" 且含"零钱通"→type=transfer，方向按"存入/转入"vs"转出"判断；ImportPage transfer 行渲染双账户选择器（紫色→分隔）+ 自动匹配零钱通账户；ParsedTransaction 新增 `default_unchecked` 字段，前端初始勾选时排除并加"需确认"徽标
 - ~~**导入账户映射记忆**~~ — 新增 `payment_method_mappings` 表（source+raw_name 唯一）；导入流程扩展为三步：上传→账户映射→预览；parse 返回历史映射并预填 account_id；mapping step 列出 distinct payment_method，已记忆项自动预选（全部已记忆时跳过此步）；save 时 upsert 映射；updateMapping() 批量同步同支付方式的所有非转账交易
+- ~~**投资转账模型 + 自动算份额 + 赎回**~~ — 投资理财账户 current_balance 公式修复（仅取持仓市值）；investment_detector 识别蚂蚁财富买入/赎回→type=transfer；parse 后处理本地名称匹配+Eastmoney反查；save 查账单日历史净值算份额（加权均价）；holdings 新增 redeem 端点；ImportPage 橙色 badge + 持仓选择器 + 保存前校验 + 保存后反馈；InvestPage 赎回按钮 + RedeemModal；seed 新增投资盈亏分类
 
 ### 🔙 回滚
 
@@ -224,6 +258,20 @@ frontend/src/
 - **底层保留**：`Category.keywords` 作为初始兜底
 - **新增上层**：`MerchantCategory` 表（counterparty → category_id），记录用户导入时手动修改的分类
 - **优先级**：商户记忆 > 关键词匹配 > 默认"其他"
+
+#### 需求13：理财产品账户大类
+- **背景**：当前 Account.category 五大类（资金账户/信用卡/充值账户/债务/投资理财），银行理财（如招行朝朝宝、基金固收+、银行结构性存款）目前只能选"投资理财"，但和基金/股票走 Holding 模型不一样——理财产品通常按"持有金额"展示，不按份额×净值
+- **方案草案**：新增「理财产品」账户大类，专门承载这类资产；可能需要一个新的"产品"模型记录买入金额/期限/到期日/预期收益率，赎回时手动录入到账金额自动算盈亏
+- **未定**：要不要复用 Holding 模型（asset_type='wealth' 已存在），还是新建独立的 WealthProduct 表
+
+#### 需求14：月度盈亏报表（HoldingSnapshot）
+- **背景**：目前 Holding.current_value 是即时市值，没有历史快照，无法回看"上个月底我的基金值多少钱"或"这个月投资赚了多少"
+- **方案草案**：
+  - 新增 `HoldingSnapshot` 表：holding_id + snapshot_date + shares + price + value + cost_total
+  - 新增 `AccountSnapshot` 表（可选）：account_id + snapshot_date + balance
+  - APScheduler 在每月 1 号 0 点自动给所有 holding 写一条快照
+  - 新增报表页：选择月份 → 显示 (本月末市值 - 上月末市值 - 本月净流入) = 月度盈亏
+- **依赖**：需求13 完成后再做（理财产品的快照逻辑可能不一样）
 
 ### 待定方案
 
@@ -244,4 +292,6 @@ frontend/src/
 
 1. **B2 修 bug** — 单个基金刷新无反应
 2. **需求2 商户记忆** — 独立，提升分类准确率
-3. **需求11 + 图表 + AI** — 锦上添花
+3. **需求13 理财产品账户大类** — 模型扩展，为需求14 做铺垫
+4. **需求14 月度盈亏报表** — 依赖快照表，需求13 完成后做
+5. **需求11 + 图表 + AI** — 锦上添花

@@ -74,6 +74,20 @@ def _detect_bank_pdf(txn: ParsedTransaction) -> Optional[InvestmentInfo]:
     return None
 
 
+# 银行理财关键词：申购与赎回共用一份。命中后只标 type=transfer，不写 detected_*，
+# 让前端按普通 transfer 渲染（双账户选择器），方向交给用户选。
+_BANK_WEALTH_KEYWORDS = (
+    "朝朝宝", "朝朝盈", "月月宝",
+    "购买理财", "理财申购", "理财认购", "理财购买", "理财赎回",
+    "结构性存款",
+)
+
+
+def _detect_bank_pdf_wealth(txn: ParsedTransaction) -> bool:
+    text = (txn.description or "") + " " + (txn.counterparty or "")
+    return any(kw in text for kw in _BANK_WEALTH_KEYWORDS)
+
+
 _DISPATCH = {
     "alipay": _detect_alipay,
     "bank_pdf": _detect_bank_pdf,
@@ -89,7 +103,13 @@ def detect_investment(txn: ParsedTransaction, source: str) -> Optional[Investmen
 
 
 def apply_detection(txn: ParsedTransaction, source: str) -> None:
-    """在解析时调用：识别为投资 → 改 type=transfer，并写入 detected_* 字段。"""
+    """在解析时调用：识别为投资 → 改 type=transfer。
+    - 公募基金/股票（蚂蚁财富、招行PDF基金/证券）：写 detected_* → 触发后续 holding 流程
+    - 银行理财（仅 bank_pdf）：仅改 type=transfer，不写 detected_* → 走普通 transfer 双账户选择器
+    """
+    if source == "bank_pdf" and _detect_bank_pdf_wealth(txn):
+        txn.type = "transfer"
+        return
     info = detect_investment(txn, source)
     if not info:
         return
