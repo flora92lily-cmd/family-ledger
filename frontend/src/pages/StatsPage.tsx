@@ -3,6 +3,8 @@ import dayjs from 'dayjs'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
 import {
   statsApi,
+  accountApi,
+  type Account,
   type MonthlySummaryStats,
   type CategoryBreakdownItem,
   type MemberBreakdownItem,
@@ -283,6 +285,8 @@ export default function StatsPage() {
   const [loading, setLoading] = useState(false)
   const [annualData, setAnnualData] = useState<AnnualReport | null>(null)
   const [annualLoading, setAnnualLoading] = useState(false)
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [assetLoading, setAssetLoading] = useState(false)
 
   const isCurrentMonth = year === now.year() && month === now.month() + 1
 
@@ -315,6 +319,12 @@ export default function StatsPage() {
     setAnnualLoading(true)
     statsApi.annual(annualYear, annualType).then(r => setAnnualData(r.data)).finally(() => setAnnualLoading(false))
   }, [annualYear, annualType, topTab])
+
+  useEffect(() => {
+    if (topTab !== 'asset') return
+    setAssetLoading(true)
+    accountApi.list().then(r => setAccounts(r.data)).finally(() => setAssetLoading(false))
+  }, [topTab])
 
   const TOP_TABS: { key: TopTab; label: string }[] = [
     { key: 'monthly', label: '月度' },
@@ -354,7 +364,7 @@ export default function StatsPage() {
 
       {/* Monthly tab */}
       {topTab === 'monthly' && (
-        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: '12px 16px 80px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Month navigation */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <button onClick={prevMonth} style={{ fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', color: '#333', padding: '4px 8px', lineHeight: 1 }}>‹</button>
@@ -412,7 +422,7 @@ export default function StatsPage() {
 
       {/* Annual tab */}
       {topTab === 'annual' && (
-        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: '12px 16px 80px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Year navigation */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <button onClick={() => setAnnualYear(y => y - 1)} style={{ fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', color: '#333', padding: '4px 8px', lineHeight: 1 }}>‹</button>
@@ -545,11 +555,105 @@ export default function StatsPage() {
         </div>
       )}
 
-      {/* Placeholder tabs */}
-      {(topTab === 'asset' || topTab === 'allocation') && (
+      {/* Asset/liability tab */}
+      {topTab === 'asset' && (
+        <div style={{ padding: '12px 16px 80px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {assetLoading ? (
+            <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
+          ) : (() => {
+            const ASSET_CATS = ['资金账户', '充值账户', '投资理财']
+            const LIAB_CATS  = ['信用卡', '债务']
+            const assets  = accounts.filter(a => ASSET_CATS.includes(a.category))
+            const liabs   = accounts.filter(a => LIAB_CATS.includes(a.category))
+            const totalAsset = assets.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
+            const totalLiab  = liabs.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
+            const netWorth   = totalAsset - totalLiab
+
+            const pieData = ASSET_CATS.map(cat => ({
+              name: cat,
+              value: assets.filter(a => a.category === cat).reduce((s, a) => s + Math.max(0, a.current_balance), 0),
+            })).filter(d => d.value > 0)
+
+            const AccountRow = ({ acc, i }: { acc: Account; i: number }) => (
+              <div key={acc.id} style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>{acc.icon}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 14, color: '#333' }}>{acc.name}</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{acc.current_balance.toFixed(2)}</span>
+                  </div>
+                  {acc.member && <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>{acc.member.avatar} {acc.member.name}</div>}
+                </div>
+              </div>
+            )
+
+            return (
+              <>
+                {/* Net worth summary */}
+                <div style={{ background: 'linear-gradient(135deg, #1976d2, #42a5f5)', borderRadius: 16, padding: '16px', color: '#fff' }}>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 4 }}>净资产</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>¥{netWorth.toFixed(2)}</div>
+                  <div style={{ display: 'flex', gap: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 11, opacity: 0.8 }}>总资产</div>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>¥{totalAsset.toFixed(2)}</div>
+                    </div>
+                    <div style={{ width: 1, background: 'rgba(255,255,255,0.3)' }} />
+                    <div>
+                      <div style={{ fontSize: 11, opacity: 0.8 }}>总负债</div>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>¥{totalLiab.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Asset composition pie */}
+                {pieData.length > 0 && (
+                  <div className="card" style={{ padding: '12px 0' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#555', padding: '0 14px 8px' }}>资产构成</div>
+                    <ResponsiveContainer width="100%" height={160}>
+                      <PieChart>
+                        <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value" nameKey="name">
+                          {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => [`¥${v.toFixed(2)}`, '']} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Asset accounts */}
+                {assets.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#4caf50', marginBottom: -4 }}>资产账户</div>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                      {assets.map((a, i) => <AccountRow key={a.id} acc={a} i={i} />)}
+                    </div>
+                  </>
+                )}
+
+                {/* Liability accounts */}
+                {liabs.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#f44336', marginBottom: -4 }}>负债账户</div>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                      {liabs.map((a, i) => <AccountRow key={a.id} acc={a} i={i} />)}
+                    </div>
+                  </>
+                )}
+
+                {accounts.length === 0 && <EmptyState text="请先在设置中添加账户" />}
+              </>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* Allocation placeholder */}
+      {topTab === 'allocation' && (
         <div className="empty-state" style={{ paddingTop: 80 }}>
           <div className="empty-icon">🚧</div>
-          <p>{PLACEHOLDER_LABELS[topTab]}即将上线</p>
+          <p>配置分析即将上线</p>
         </div>
       )}
     </div>
