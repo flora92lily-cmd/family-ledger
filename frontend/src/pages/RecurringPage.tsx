@@ -128,21 +128,23 @@ export default function RecurringPage() {
   const filteredCatTree = catTree.filter(c => c.type === ruleForm.type)
 
   return (
-    <div className="page-content">
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-        <button onClick={() => navigate('/settings')}
-          style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', padding: '0 12px 0 0', color: '#374151' }}>
-          ←
-        </button>
-        <div className="page-header" style={{ marginBottom: 0 }}>周期记账</div>
+    <div className="form-page">
+      <div className="page-header">
+        <button className="back-btn" onClick={() => navigate('/settings')}>←</button>
+        周期记账
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <button onClick={openAdd}
-          style={{ background: '#3b82f6', border: 'none', color: 'white', fontSize: 14, fontWeight: 600, cursor: 'pointer', borderRadius: 8, padding: '8px 20px' }}>
-          + 新建规则
-        </button>
-      </div>
+      <div style={{ padding: '0 0 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button onClick={openAdd}
+            style={{
+              background: 'var(--primary)', color: 'white', border: 'none',
+              borderRadius: 8, fontSize: 14, fontWeight: 600,
+              padding: '8px 16px', cursor: 'pointer',
+            }}>
+            + 新建
+          </button>
+        </div>
 
       {rules.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', color: '#9ca3af', fontSize: 14, padding: '24px 0' }}>
@@ -205,6 +207,8 @@ export default function RecurringPage() {
           )
         })
       )}
+
+      </div>{/* end padded wrapper */}
 
       {/* ─── 编辑弹窗 ─── */}
       {showModal && (
