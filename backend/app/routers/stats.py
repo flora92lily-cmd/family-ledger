@@ -161,6 +161,37 @@ class MerchantItem(BaseModel):
     percentage: float  # % of period total
 
 
+class MonthlyTrend(BaseModel):
+    month: int  # 1-12
+    income: float
+    expense: float
+    balance: float
+
+
+class AnnualCategoryItem(BaseModel):
+    id: int
+    name: str
+    icon: str
+    total: float
+    percentage: float
+    children: list[CategoryChild]
+
+
+class AnnualMemberItem(BaseModel):
+    member_id: Optional[int]
+    member_name: str
+    member_avatar: str
+    total: float
+    percentage: float
+
+
+class AnnualReport(BaseModel):
+    year: int
+    trend: list[MonthlyTrend]
+    categories: list[AnnualCategoryItem]
+    members: list[AnnualMemberItem]
+
+
 # ─── endpoints ───────────────────────────────────────────────────────────────
 
 @router.get("/monthly-summary", response_model=MonthlySummaryStats)
@@ -472,3 +503,111 @@ async def top_merchants(
         for row in r.all()
         if float(row.total or 0) > 0
     ]
+
+
+@router.get("/annual", response_model=AnnualReport)
+async def annual_report(
+    year: int = Query(...),
+    type: str = Query("expense"),
+    db: AsyncSession = Depends(get_db),
+):
+    eff_exp = _eff("expense")
+    eff_inc = _eff("income")
+
+    # Monthly trend
+    trend_r = await db.execute(
+        select(
+            extract("month", Transaction.date).label("m"),
+            func.sum(case((Transaction.type == "income", _eff("income")), else_=0)).label("inc"),
+            func.sum(case((Transaction.type == "expense", eff_exp), else_=0)).label("exp"),
+        )
+        .where(extract("year", Transaction.date) == year)
+        .group_by(extract("month", Transaction.date))
+    )
+    trend_by_month: dict[int, tuple[float, float]] = {}
+    for row in trend_r.all():
+        trend_by_month[int(row[0])] = (float(row[1] or 0), float(row[2] or 0))
+
+    trend = [
+        MonthlyTrend(
+            month=m,
+            income=round(trend_by_month.get(m, (0, 0))[0], 2),
+            expense=round(trend_by_month.get(m, (0, 0))[1], 2),
+            balance=round(trend_by_month.get(m, (0, 0))[0] - trend_by_month.get(m, (0, 0))[1], 2),
+        )
+        for m in range(1, 13)
+    ]
+
+    # Category totals for the requested type
+    eff = _eff(type)
+    cat_r = await db.execute(
+        select(Transaction.category_id, func.sum(eff).label("total"))
+        .where(
+            extract("year", Transaction.date) == year,
+            Transaction.type == type,
+            Transaction.category_id.isnot(None),
+        )
+        .group_by(Transaction.category_id)
+    )
+    cat_totals: dict[int, float] = {row[0]: float(row[1] or 0) for row in cat_r.all()}
+
+    all_cat_ids = set(cat_totals)
+    cats = await _fetch_cats_with_parents(db, all_cat_ids)
+    parent_totals = _aggregate_to_parents(cat_totals, cats)
+
+    children_of: dict[int, list[dict]] = {}
+    for cid, total in cat_totals.items():
+        cat = cats.get(cid)
+        if cat and cat.parent_id and cat.parent_id in cats:
+            children_of.setdefault(cat.parent_id, []).append({
+                "id": cid, "name": cat.name, "icon": cat.icon, "total": round(total, 2),
+            })
+
+    grand_total = sum(parent_totals.values()) or 1
+    categories = []
+    for pid, total in sorted(parent_totals.items(), key=lambda x: x[1], reverse=True):
+        if total <= 0:
+            continue
+        cat = cats.get(pid)
+        if cat is None:
+            continue
+        children_raw = sorted(children_of.get(pid, []), key=lambda x: x["total"], reverse=True)
+        parent_nz = total or 1
+        categories.append(AnnualCategoryItem(
+            id=pid, name=cat.name, icon=cat.icon,
+            total=round(total, 2),
+            percentage=round(total / grand_total * 100, 1),
+            children=[
+                CategoryChild(id=c["id"], name=c["name"], icon=c["icon"],
+                              total=c["total"], percentage=round(c["total"] / parent_nz * 100, 1))
+                for c in children_raw
+            ],
+        ))
+
+    # Member totals
+    mem_r = await db.execute(
+        select(Transaction.member_id, func.sum(eff).label("total"))
+        .where(extract("year", Transaction.date) == year, Transaction.type == type)
+        .group_by(Transaction.member_id)
+    )
+    mem_rows = {row[0]: float(row[1] or 0) for row in mem_r.all()}
+    all_members_r = await db.execute(select(FamilyMember).order_by(FamilyMember.sort_order, FamilyMember.id))
+    members_by_id = {m.id: m for m in all_members_r.scalars().all()}
+    grand_mem = sum(mem_rows.values()) or 1
+
+    members: list[AnnualMemberItem] = []
+    if None in mem_rows:
+        t = mem_rows[None]
+        members.append(AnnualMemberItem(
+            member_id=None, member_name="未指定成员", member_avatar="👤",
+            total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
+        ))
+    for mid, t in sorted([(k, v) for k, v in mem_rows.items() if k is not None], key=lambda x: x[1], reverse=True):
+        m = members_by_id.get(mid)
+        members.append(AnnualMemberItem(
+            member_id=mid, member_name=m.name if m else f"成员{mid}",
+            member_avatar=m.avatar if m else "👤",
+            total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
+        ))
+
+    return AnnualReport(year=year, trend=trend, categories=categories, members=members)

@@ -547,6 +547,37 @@ export interface MerchantItem {
   percentage: number
 }
 
+export interface MonthlyTrend {
+  month: number
+  income: number
+  expense: number
+  balance: number
+}
+
+export interface AnnualCategoryItem {
+  id: number
+  name: string
+  icon: string
+  total: number
+  percentage: number
+  children: CategoryChild[]
+}
+
+export interface AnnualMemberItem {
+  member_id: number | null
+  member_name: string
+  member_avatar: string
+  total: number
+  percentage: number
+}
+
+export interface AnnualReport {
+  year: number
+  trend: MonthlyTrend[]
+  categories: AnnualCategoryItem[]
+  members: AnnualMemberItem[]
+}
+
 export const statsApi = {
   monthlySummary: (year: number, month: number) =>
     api.get<MonthlySummaryStats>('/api/stats/monthly-summary', { params: { year, month } }),
@@ -558,6 +589,8 @@ export const statsApi = {
     api.get<TagBreakdownGroup[]>('/api/stats/tag-breakdown', { params: { year, month, type } }),
   topMerchants: (year: number, month: number, type: string, limit = 10) =>
     api.get<MerchantItem[]>('/api/stats/top-merchants', { params: { year, month, type, limit } }),
+  annual: (year: number, type: string) =>
+    api.get<AnnualReport>('/api/stats/annual', { params: { year, type } }),
 }
 
 export const recurringRuleApi = {

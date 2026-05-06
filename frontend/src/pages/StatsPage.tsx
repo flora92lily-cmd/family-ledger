@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
 import {
   statsApi,
   type MonthlySummaryStats,
@@ -9,6 +9,7 @@ import {
   type TagBreakdownGroup,
   type MerchantItem,
   type StatCompareValue,
+  type AnnualReport,
 } from '../api'
 
 const COLORS = [
@@ -269,6 +270,8 @@ export default function StatsPage() {
   const [topTab, setTopTab] = useState<TopTab>('monthly')
   const [period, setPeriod] = useState({ year: now.year(), month: now.month() + 1 })
   const { year, month } = period
+  const [annualYear, setAnnualYear] = useState(now.year())
+  const [annualType, setAnnualType] = useState<'expense' | 'income'>('expense')
   const [viewType, setViewType] = useState<'expense' | 'income'>('expense')
   const [subTab, setSubTab] = useState<SubTab>('category')
 
@@ -278,6 +281,8 @@ export default function StatsPage() {
   const [tags, setTags] = useState<TagBreakdownGroup[]>([])
   const [merchants, setMerchants] = useState<MerchantItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [annualData, setAnnualData] = useState<AnnualReport | null>(null)
+  const [annualLoading, setAnnualLoading] = useState(false)
 
   const isCurrentMonth = year === now.year() && month === now.month() + 1
 
@@ -305,6 +310,12 @@ export default function StatsPage() {
     load.finally(() => setLoading(false))
   }, [year, month, viewType, subTab, topTab])
 
+  useEffect(() => {
+    if (topTab !== 'annual') return
+    setAnnualLoading(true)
+    statsApi.annual(annualYear, annualType).then(r => setAnnualData(r.data)).finally(() => setAnnualLoading(false))
+  }, [annualYear, annualType, topTab])
+
   const TOP_TABS: { key: TopTab; label: string }[] = [
     { key: 'monthly', label: '月度' },
     { key: 'annual', label: '年度' },
@@ -318,7 +329,7 @@ export default function StatsPage() {
     { key: 'merchant', label: 'TOP 商户' },
   ]
   const PLACEHOLDER_LABELS: Partial<Record<TopTab, string>> = {
-    annual: '年度报表', asset: '资产负债表', allocation: '配置分析',
+    asset: '资产负债表', allocation: '配置分析',
   }
 
   return (
@@ -399,8 +410,143 @@ export default function StatsPage() {
         </div>
       )}
 
+      {/* Annual tab */}
+      {topTab === 'annual' && (
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Year navigation */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
+            <button onClick={() => setAnnualYear(y => y - 1)} style={{ fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', color: '#333', padding: '4px 8px', lineHeight: 1 }}>‹</button>
+            <span style={{ fontSize: 16, fontWeight: 600, color: '#333', minWidth: 60, textAlign: 'center' }}>{annualYear}</span>
+            <button onClick={() => setAnnualYear(y => Math.min(y + 1, now.year()))} style={{ fontSize: 22, background: 'none', border: 'none', cursor: annualYear >= now.year() ? 'default' : 'pointer', color: annualYear >= now.year() ? '#ccc' : '#333', padding: '4px 8px', lineHeight: 1 }}>›</button>
+          </div>
+
+          {annualLoading ? (
+            <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
+          ) : annualData && (
+            <>
+              {/* 12-month bar chart */}
+              <div className="card" style={{ padding: '12px 0' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#555', padding: '0 14px 8px' }}>全年收支趋势</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={annualData.trend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }} barSize={8} barGap={2}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tickFormatter={m => `${m}月`} tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : `${v}`} />
+                    <Tooltip formatter={(v: number, name: string) => [`¥${v.toFixed(0)}`, name === 'income' ? '收入' : name === 'expense' ? '支出' : '结余']} />
+                    <Legend formatter={k => k === 'income' ? '收入' : k === 'expense' ? '支出' : '结余'} wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="income" fill="#4caf50" radius={[2, 2, 0, 0]} />
+                    <Bar dataKey="expense" fill="#f44336" radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Year total summary */}
+              {(() => {
+                const totalInc = annualData.trend.reduce((s, m) => s + m.income, 0)
+                const totalExp = annualData.trend.reduce((s, m) => s + m.expense, 0)
+                return (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1, padding: '10px 12px', background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>全年收入</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#4caf50' }}>¥{totalInc.toFixed(0)}</div>
+                    </div>
+                    <div style={{ flex: 1, padding: '10px 12px', background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>全年支出</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#f44336' }}>¥{totalExp.toFixed(0)}</div>
+                    </div>
+                    <div style={{ flex: 1, padding: '10px 12px', background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>全年结余</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#2196F3' }}>¥{(totalInc - totalExp).toFixed(0)}</div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Type toggle for category/member breakdown */}
+              <div className="type-toggle">
+                <button className={annualType === 'expense' ? 'active' : ''} onClick={() => setAnnualType('expense')}>支出</button>
+                <button className={annualType === 'income' ? 'active' : ''} onClick={() => setAnnualType('income')}>收入</button>
+              </div>
+
+              {/* Category breakdown */}
+              {annualData.categories.length === 0 ? (
+                <EmptyState text={`${annualYear} 年没有${annualType === 'expense' ? '支出' : '收入'}数据`} />
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: -4 }}>分类汇总</div>
+                  <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    {annualData.categories.map((cat, i) => (
+                      <div key={cat.id}>
+                        <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 8, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>{cat.icon}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span style={{ fontSize: 14, color: '#333' }}>{cat.name}</span>
+                              <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{cat.total.toFixed(0)}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ flex: 1, height: 3, background: '#f0f0f0', borderRadius: 2 }}>
+                                <div style={{ width: `${cat.percentage}%`, height: '100%', background: COLORS[i % COLORS.length], borderRadius: 2 }} />
+                              </div>
+                              <span style={{ fontSize: 10, color: '#aaa', minWidth: 32, textAlign: 'right' }}>{cat.percentage.toFixed(1)}%</span>
+                            </div>
+                          </div>
+                        </div>
+                        {cat.children.map(child => (
+                          <div key={child.id} style={{ display: 'flex', alignItems: 'center', padding: '7px 14px 7px 42px', gap: 8, background: '#fafafa', borderTop: '1px solid #f0f0f0' }}>
+                            <span style={{ fontSize: 15, flexShrink: 0 }}>{child.icon}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                                <span style={{ fontSize: 13, color: '#555' }}>{child.name}</span>
+                                <span style={{ fontSize: 13, color: '#555' }}>¥{child.total.toFixed(0)}</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={{ flex: 1, height: 2, background: '#eee', borderRadius: 1 }}>
+                                  <div style={{ width: `${child.percentage}%`, height: '100%', background: COLORS[i % COLORS.length], opacity: 0.55, borderRadius: 1 }} />
+                                </div>
+                                <span style={{ fontSize: 10, color: '#bbb', minWidth: 32, textAlign: 'right' }}>{child.percentage.toFixed(1)}%</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Member breakdown */}
+                  {annualData.members.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: -4 }}>成员汇总</div>
+                      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        {annualData.members.map((m, i) => (
+                          <div key={m.member_id ?? 'null'} style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
+                            <span style={{ fontSize: 20, flexShrink: 0 }}>{m.member_avatar}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                <span style={{ fontSize: 14, color: '#333' }}>{m.member_name}</span>
+                                <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{m.total.toFixed(0)}</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={{ flex: 1, height: 3, background: '#f0f0f0', borderRadius: 2 }}>
+                                  <div style={{ width: `${m.percentage}%`, height: '100%', background: '#2196F3', borderRadius: 2 }} />
+                                </div>
+                                <span style={{ fontSize: 10, color: '#aaa', minWidth: 32, textAlign: 'right' }}>{m.percentage.toFixed(1)}%</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Placeholder tabs */}
-      {topTab !== 'monthly' && (
+      {(topTab === 'asset' || topTab === 'allocation') && (
         <div className="empty-state" style={{ paddingTop: 80 }}>
           <div className="empty-icon">🚧</div>
           <p>{PLACEHOLDER_LABELS[topTab]}即将上线</p>
