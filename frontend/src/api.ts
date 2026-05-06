@@ -481,6 +481,85 @@ export interface RecurringExecution {
   executed_at: string
 }
 
+// === Stats Types ===
+export interface StatCompareValue {
+  current: number
+  prev_month: number
+  prev_month_pct: number | null
+  prev_year: number
+  prev_year_pct: number | null
+}
+
+export interface MonthlySummaryStats {
+  income: StatCompareValue
+  expense: StatCompareValue
+  balance: StatCompareValue
+}
+
+export interface CategoryChild {
+  id: number
+  name: string
+  icon: string
+  total: number
+  percentage: number
+}
+
+export interface CategoryBreakdownItem {
+  id: number
+  name: string
+  icon: string
+  total: number
+  percentage: number
+  prev_month_pct: number | null
+  prev_year_pct: number | null
+  children: CategoryChild[]
+}
+
+export interface MemberBreakdownItem {
+  member_id: number | null
+  member_name: string
+  member_avatar: string
+  total: number
+  percentage: number
+  prev_month_pct: number | null
+}
+
+export interface TagStatItem {
+  tag_id: number
+  tag_name: string
+  tag_icon: string
+  total: number
+  percentage: number
+}
+
+export interface TagBreakdownGroup {
+  tag_category_id: number
+  tag_category_name: string
+  tag_category_icon: string
+  total: number
+  tags: TagStatItem[]
+}
+
+export interface MerchantItem {
+  counterparty: string
+  total: number
+  count: number
+  percentage: number
+}
+
+export const statsApi = {
+  monthlySummary: (year: number, month: number) =>
+    api.get<MonthlySummaryStats>('/api/stats/monthly-summary', { params: { year, month } }),
+  categoryBreakdown: (year: number, month: number, type: string) =>
+    api.get<CategoryBreakdownItem[]>('/api/stats/category-breakdown', { params: { year, month, type } }),
+  memberBreakdown: (year: number, month: number, type: string) =>
+    api.get<MemberBreakdownItem[]>('/api/stats/member-breakdown', { params: { year, month, type } }),
+  tagBreakdown: (year: number, month: number, type: string) =>
+    api.get<TagBreakdownGroup[]>('/api/stats/tag-breakdown', { params: { year, month, type } }),
+  topMerchants: (year: number, month: number, type: string, limit = 10) =>
+    api.get<MerchantItem[]>('/api/stats/top-merchants', { params: { year, month, type, limit } }),
+}
+
 export const recurringRuleApi = {
   list: () => api.get<RecurringRule[]>('/api/recurring-rules/'),
   get: (id: number) => api.get<RecurringRule>(`/api/recurring-rules/${id}`),
