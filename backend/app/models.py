@@ -208,3 +208,53 @@ class PaymentMethodMapping(Base):
     last_used_at = Column(DateTime, server_default=func.now())
 
     account = relationship("Account", foreign_keys=[account_id])
+
+
+# ─── 循环记账规则 ───────────────────────────────────────────────────────────────
+
+class RecurringRule(Base):
+    """循环交易规则：按周期自动生成交易"""
+    __tablename__ = "recurring_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 周期设置
+    recurrence_type = Column(String(10), nullable=False)   # "weekly" | "monthly"
+    recurrence_day = Column(Integer, nullable=False)        # weekly=1~7(周一~周日), monthly=1~31
+    start_date = Column(Date, nullable=False)
+    # 结束条件
+    end_type = Column(String(10), nullable=False, default="never")  # "never" | "date" | "count"
+    end_date = Column(Date, nullable=True)
+    max_count = Column(Integer, nullable=True)
+    executed_count = Column(Integer, nullable=False, default=0)
+    # 交易模板
+    type = Column(String(10), nullable=False)              # "expense" | "income" | "transfer"
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    to_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    amount = Column(Float, nullable=False)
+    member_id = Column(Integer, ForeignKey("family_members.id"), nullable=True)
+    description = Column(String(200), default="")
+    tag_ids_json = Column(Text, default="[]")              # JSON array of tag IDs
+    # 状态
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    category = relationship("Category")
+    account = relationship("Account", foreign_keys=[account_id])
+    to_account = relationship("Account", foreign_keys=[to_account_id])
+    member = relationship("FamilyMember", foreign_keys=[member_id])
+    executions = relationship("RecurringExecution", back_populates="rule", cascade="all, delete-orphan")
+
+
+class RecurringExecution(Base):
+    """记录每次循环生成的交易，用于去重和追溯"""
+    __tablename__ = "recurring_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rule_id = Column(Integer, ForeignKey("recurring_rules.id", ondelete="CASCADE"), nullable=False)
+    transaction_id = Column(Integer, ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True)
+    target_date = Column(Date, nullable=False)
+    executed_at = Column(DateTime, server_default=func.now())
+
+    rule = relationship("RecurringRule", back_populates="executions")

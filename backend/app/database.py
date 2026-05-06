@@ -49,6 +49,34 @@ async def init_db():
                 last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(source, raw_name)
             )""",
+            """CREATE TABLE IF NOT EXISTS recurring_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recurrence_type VARCHAR(10) NOT NULL,
+                recurrence_day INTEGER NOT NULL,
+                start_date DATE NOT NULL,
+                end_type VARCHAR(10) NOT NULL DEFAULT 'never',
+                end_date DATE,
+                max_count INTEGER,
+                executed_count INTEGER NOT NULL DEFAULT 0,
+                type VARCHAR(10) NOT NULL,
+                category_id INTEGER REFERENCES categories(id),
+                account_id INTEGER REFERENCES accounts(id),
+                to_account_id INTEGER REFERENCES accounts(id),
+                amount REAL NOT NULL,
+                member_id INTEGER REFERENCES family_members(id),
+                description VARCHAR(200) DEFAULT '',
+                tag_ids_json TEXT DEFAULT '[]',
+                is_active BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS recurring_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER NOT NULL REFERENCES recurring_rules(id) ON DELETE CASCADE,
+                transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+                target_date DATE NOT NULL,
+                executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))

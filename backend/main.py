@@ -8,9 +8,9 @@ from fastapi.responses import FileResponse
 from starlette.types import Scope
 from app.database import init_db, async_session
 from app.routers import categories, transactions, imports, holdings, accounts
-from app.routers import tags, reimbursements, members
+from app.routers import tags, reimbursements, members, recurring
 from app.seed import seed_defaults
-from app.scheduler import create_scheduler, startup_backfill
+from app.scheduler import create_scheduler, startup_backfill, startup_backfill_recurring
 
 
 class CacheControlledStaticFiles(StaticFiles):
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
 
     # 开机补漏：后台运行，不阻塞启动
     asyncio.create_task(startup_backfill())
+    asyncio.create_task(startup_backfill_recurring())
 
     yield
 
@@ -68,6 +69,7 @@ app.include_router(imports.router)
 app.include_router(holdings.router)
 app.include_router(accounts.router)
 app.include_router(reimbursements.router)
+app.include_router(recurring.router)
 
 
 @app.get("/api/health")

@@ -276,3 +276,79 @@ class MemberSummary(BaseModel):
     member_avatar: str
     total: float
     percentage: float
+
+
+# ─── RecurringRule ─────────────────────────────────────────────────────────────
+
+class RecurringRuleCreate(BaseModel):
+    recurrence_type: str       # "weekly" | "monthly"
+    recurrence_day: int        # 1-7 or 1-31
+    start_date: Date
+    end_type: str = "never"    # "never" | "date" | "count"
+    end_date: Optional[Date] = None
+    max_count: Optional[int] = None
+    type: str                  # "expense" | "income" | "transfer"
+    category_id: Optional[int] = None
+    account_id: Optional[int] = None
+    to_account_id: Optional[int] = None
+    amount: float
+    member_id: Optional[int] = None
+    description: str = ""
+    tag_ids: list[int] = []
+
+
+class RecurringRuleUpdate(BaseModel):
+    """PATCH update -- all fields optional. Changes only affect future transactions."""
+    recurrence_type: Optional[str] = None
+    recurrence_day: Optional[int] = None
+    start_date: Optional[Date] = None
+    end_type: Optional[str] = None
+    end_date: Optional[Date] = None
+    max_count: Optional[int] = None
+    type: Optional[str] = None
+    category_id: Optional[int] = None
+    account_id: Optional[int] = None
+    to_account_id: Optional[int] = None
+    amount: Optional[float] = None
+    member_id: Optional[int] = None
+    description: Optional[str] = None
+    tag_ids: Optional[list[int]] = None
+    is_active: Optional[bool] = None
+
+
+class RecurringRuleOut(BaseModel):
+    id: int
+    recurrence_type: str
+    recurrence_day: int
+    start_date: Date
+    end_type: str
+    end_date: Optional[Date] = None
+    max_count: Optional[int] = None
+    executed_count: int
+    type: str
+    category_id: Optional[int] = None
+    account_id: Optional[int] = None
+    to_account_id: Optional[int] = None
+    amount: float
+    member_id: Optional[int] = None
+    description: str
+    tag_ids: list[int] = []
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    category: Optional[CategoryOut] = None
+    account: Optional[AccountBrief] = None
+    to_account: Optional[AccountBrief] = None
+    member: Optional[FamilyMemberBrief] = None
+
+    model_config = {"from_attributes": True}
+
+
+class RecurringExecutionOut(BaseModel):
+    id: int
+    rule_id: int
+    transaction_id: Optional[int] = None
+    target_date: Date
+    executed_at: datetime
+
+    model_config = {"from_attributes": True}

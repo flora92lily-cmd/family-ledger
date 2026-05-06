@@ -1,11 +1,14 @@
-"""行情定时刷新调度器
+"""行情定时刷新调度器 + 循环规则定时生成
 
 策略：
 - 每天 22:30（基金净值发布后）+ 次日 10:30（QDII 补刷）各跑一次
-- 开机时检查今日未刷新的持仓，后台补漏（不阻塞启动）
+- 每天 00:05 处理循环记账规则，自动生成到期交易
+- 开机时检查今日未刷新的持仓 + 未处理的循环规则，后台补漏（不阻塞启动）
 - 失败静默记日志，不通知用户
 """
 import asyncio
+import calendar
+import json
 import logging
 from datetime import date, datetime
 
@@ -14,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import Holding
+from app.models import Holding, RecurringRule, RecurringExecution, Transaction, transaction_tags
 from app.price_service import fetch_price
 
 logger = logging.getLogger(__name__)
@@ -92,6 +95,145 @@ async def startup_backfill() -> None:
         logger.error("开机补漏异常: %s", e)
 
 
+def _matches_today(rule: RecurringRule, today: date) -> bool:
+    """判断规则是否应在今天执行"""
+    if today < rule.start_date:
+        return False
+
+    if rule.recurrence_type == "weekly":
+        # recurrence_day: 1=Monday, ..., 7=Sunday
+        # Python isoweekday(): 1=Monday, 7=Sunday
+        return today.isoweekday() == rule.recurrence_day
+
+    if rule.recurrence_type == "monthly":
+        target_day = rule.recurrence_day
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        if target_day > last_day:
+            return False  # 如 31 号在 2 月不触发
+        return today.day == target_day
+
+    return False
+
+
+async def process_recurring_rules() -> None:
+    """每日定时处理循环规则，生成到期交易"""
+    today = date.today()
+    logger.info("循环规则处理：开始检查 %s", today)
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(RecurringRule).where(
+                RecurringRule.is_active == True,
+                RecurringRule.start_date <= today,
+            )
+        )
+        rules = result.scalars().all()
+
+        created_count = 0
+        for rule in rules:
+            # 1. 检查结束条件
+            if rule.end_type == "date" and rule.end_date and today > rule.end_date:
+                rule.is_active = False
+                continue
+            if rule.end_type == "count" and rule.max_count and rule.executed_count >= rule.max_count:
+                rule.is_active = False
+                continue
+
+            # 2. 检查今天是否匹配
+            if not _matches_today(rule, today):
+                continue
+
+            # 3. 去重：检查今天是否已执行
+            existing = await db.execute(
+                select(RecurringExecution).where(
+                    RecurringExecution.rule_id == rule.id,
+                    RecurringExecution.target_date == today,
+                )
+            )
+            if existing.scalar():
+                continue
+
+            # 4. 创建交易
+            tag_ids = json.loads(rule.tag_ids_json or "[]")
+            txn = Transaction(
+                amount=rule.amount,
+                type=rule.type,
+                description=rule.description,
+                date=today,
+                source="recurring",
+                category_id=rule.category_id,
+                account_id=rule.account_id,
+                to_account_id=rule.to_account_id,
+                member_id=rule.member_id,
+            )
+            db.add(txn)
+            await db.flush()
+
+            # 设置标签
+            from sqlalchemy import insert as sa_insert
+            for tid in tag_ids:
+                await db.execute(sa_insert(transaction_tags).values(
+                    transaction_id=txn.id, tag_id=tid
+                ))
+
+            # 5. 记录执行
+            execution = RecurringExecution(
+                rule_id=rule.id,
+                transaction_id=txn.id,
+                target_date=today,
+            )
+            db.add(execution)
+
+            # 6. 更新计数
+            rule.executed_count = (rule.executed_count or 0) + 1
+            if rule.end_type == "count" and rule.max_count and rule.executed_count >= rule.max_count:
+                rule.is_active = False
+
+            created_count += 1
+
+        await db.commit()
+
+    if created_count:
+        logger.info("循环规则处理完成：生成 %d 笔交易", created_count)
+    else:
+        logger.info("循环规则处理完成：无到期规则")
+
+
+async def startup_backfill_recurring() -> None:
+    """开机补漏：处理今天尚未执行的循环规则（后台异步运行）"""
+    today = date.today()
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(RecurringRule).where(
+                    RecurringRule.is_active == True,
+                    RecurringRule.start_date <= today,
+                )
+            )
+            rules = result.scalars().all()
+
+        pending = []
+        for rule in rules:
+            if not _matches_today(rule, today):
+                continue
+            if rule.end_type == "date" and rule.end_date and today > rule.end_date:
+                continue
+            if rule.end_type == "count" and rule.max_count and rule.executed_count >= rule.max_count:
+                continue
+            pending.append(rule)
+
+        if not pending:
+            logger.info("开机补漏（循环规则）：今天无待处理规则")
+            return
+
+        logger.info("开机补漏（循环规则）：发现 %d 条待处理规则", len(pending))
+        # 复用主处理逻辑
+        await process_recurring_rules()
+
+    except Exception as e:
+        logger.error("开机补漏（循环规则）异常: %s", e)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """创建并配置 APScheduler（AsyncIOScheduler，Asia/Shanghai 时区）"""
     tz = "Asia/Shanghai"
@@ -113,6 +255,15 @@ def create_scheduler() -> AsyncIOScheduler:
         id="price_refresh_1030",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+
+    # 每天 00:05 — 处理循环记账规则
+    scheduler.add_job(
+        process_recurring_rules,
+        CronTrigger(hour=0, minute=5, timezone=tz),
+        id="recurring_rules_0005",
+        replace_existing=True,
+        misfire_grace_time=600,
     )
 
     return scheduler

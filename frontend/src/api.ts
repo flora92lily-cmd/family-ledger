@@ -442,4 +442,55 @@ export const accountApi = {
   delete: (id: number) => api.delete(`/api/accounts/${id}`),
 }
 
+// === Recurring Rule ===
+export type RecurrenceType = 'weekly' | 'monthly'
+export type EndType = 'never' | 'date' | 'count'
+export type TxnType = 'expense' | 'income' | 'transfer'
+
+export interface RecurringRule {
+  id: number
+  recurrence_type: RecurrenceType
+  recurrence_day: number
+  start_date: string
+  end_type: EndType
+  end_date: string | null
+  max_count: number | null
+  executed_count: number
+  type: TxnType
+  category_id: number | null
+  account_id: number | null
+  to_account_id: number | null
+  amount: number
+  member_id: number | null
+  description: string
+  tag_ids: number[]
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  category: Category | null
+  account: AccountBrief | null
+  to_account: AccountBrief | null
+  member: FamilyMemberBrief | null
+}
+
+export interface RecurringExecution {
+  id: number
+  rule_id: number
+  transaction_id: number | null
+  target_date: string
+  executed_at: string
+}
+
+export const recurringRuleApi = {
+  list: () => api.get<RecurringRule[]>('/api/recurring-rules/'),
+  get: (id: number) => api.get<RecurringRule>(`/api/recurring-rules/${id}`),
+  create: (data: Record<string, unknown>) =>
+    api.post<RecurringRule>('/api/recurring-rules/', data),
+  update: (id: number, data: Record<string, unknown>) =>
+    api.patch<RecurringRule>(`/api/recurring-rules/${id}`, data),
+  delete: (id: number) => api.delete(`/api/recurring-rules/${id}`),
+  executions: (id: number) =>
+    api.get<RecurringExecution[]>(`/api/recurring-rules/${id}/executions`),
+}
+
 export default api

@@ -305,6 +305,17 @@ export default function SettingsPage() {
         <div style={{ color: '#9ca3af', fontSize: 20 }}>›</div>
       </div>
 
+      {/* 周期记账 */}
+      <div className="card" onClick={() => navigate('/recurring')}
+        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+        <div style={{ fontSize: 28, marginRight: 12 }}>🔁</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>周期记账</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>定时自动记账 · 工资 · 房租 · 公积金</div>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: 20 }}>›</div>
+      </div>
+
       {/* 家庭成员管理 */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

@@ -7,13 +7,14 @@ import ImportPage from './pages/ImportPage'
 import InvestPage from './pages/InvestPage'
 import ReimbursementPage from './pages/ReimbursementPage'
 import CategoryPage from './pages/CategoryPage'
+import RecurringPage from './pages/RecurringPage'
 
 function TabBar() {
   const navigate = useNavigate()
   const location = useLocation()
   const path = location.pathname
 
-  if (path === '/add' || path === '/import' || path === '/reimbursements' || path === '/categories') return null
+  if (path === '/add' || path === '/import' || path === '/reimbursements' || path === '/categories' || path === '/recurring') return null
 
   return (
     <div className="tab-bar">
@@ -52,6 +53,7 @@ function App() {
         <Route path="/import" element={<ImportPage />} />
         <Route path="/reimbursements" element={<ReimbursementPage />} />
         <Route path="/categories" element={<CategoryPage />} />
+        <Route path="/recurring" element={<RecurringPage />} />
       </Routes>
       <TabBar />
     </BrowserRouter>
