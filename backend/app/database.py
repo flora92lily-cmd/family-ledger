@@ -77,6 +77,25 @@ async def init_db():
                 target_date DATE NOT NULL,
                 executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""",
+            """CREATE TABLE IF NOT EXISTS account_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                snapshot_date DATE NOT NULL,
+                balance REAL NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(account_id, snapshot_date)
+            )""",
+            """CREATE TABLE IF NOT EXISTS holding_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                holding_id INTEGER NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+                snapshot_date DATE NOT NULL,
+                shares REAL NOT NULL,
+                price REAL NOT NULL,
+                value REAL NOT NULL,
+                cost_total REAL NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(holding_id, snapshot_date)
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))
@@ -95,6 +114,7 @@ async def init_db():
             "ALTER TABLE transactions ADD COLUMN external_id VARCHAR(100) DEFAULT ''",
             "ALTER TABLE holdings ADD COLUMN account_id INTEGER REFERENCES accounts(id)",
             "ALTER TABLE family_members ADD COLUMN sort_order INTEGER DEFAULT 0",
+            "ALTER TABLE holdings ADD COLUMN risk_class VARCHAR(20) DEFAULT 'other'",
         ]:
             try:
                 await conn.execute(text(stmt))

@@ -6,7 +6,7 @@ from sqlalchemy import select, func, extract, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models import Transaction, Category, FamilyMember, Tag, TagCategory, transaction_tags
+from ..models import Transaction, Category, FamilyMember, Tag, TagCategory, transaction_tags, AccountSnapshot, HoldingSnapshot, Holding
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -611,3 +611,108 @@ async def annual_report(
         ))
 
     return AnnualReport(year=year, trend=trend, categories=categories, members=members)
+
+
+# ─── 资产配置（R8） ─────────────────────────────────────────────────────────────
+
+RISK_CLASS_LABELS = {
+    "cash":       "现金/货币",
+    "bond":       "债券/固收",
+    "mixed":      "混合型",
+    "equity":     "股票/权益",
+    "realestate": "不动产",
+    "other":      "其他",
+}
+
+
+class AllocationItem(BaseModel):
+    risk_class: str
+    label: str
+    total: float
+    percentage: float
+
+
+class AllocationReport(BaseModel):
+    total: float
+    items: list[AllocationItem]
+
+
+@router.get("/allocation", response_model=AllocationReport)
+async def allocation_report(db: AsyncSession = Depends(get_db)):
+    """资产配置现状：按风险等级汇总持仓市值（+ 账户余额中的现金）"""
+    r = await db.execute(select(Holding))
+    holdings = r.scalars().all()
+
+    buckets: dict[str, float] = {}
+    for h in holdings:
+        rc = h.risk_class or "other"
+        buckets[rc] = buckets.get(rc, 0) + h.current_value
+
+    total = sum(buckets.values()) or 1
+    items = [
+        AllocationItem(
+            risk_class=rc,
+            label=RISK_CLASS_LABELS.get(rc, rc),
+            total=round(v, 2),
+            percentage=round(v / total * 100, 1),
+        )
+        for rc, v in sorted(buckets.items(), key=lambda x: x[1], reverse=True)
+        if v > 0
+    ]
+    return AllocationReport(total=round(total if total != 1 else 0, 2), items=items)
+
+
+# ─── 快照手动触发 ───────────────────────────────────────────────────────────────
+
+@router.post("/snapshots/take")
+async def manual_snapshot():
+    """手动触发资产快照（管理用途）"""
+    from app.scheduler import take_snapshots
+    n_accounts, n_holdings = await take_snapshots()
+    return {"message": "快照已生成", "accounts": n_accounts, "holdings": n_holdings}
+
+
+# ─── 净资产趋势（基于快照）─────────────────────────────────────────────────────
+
+class NetWorthPoint(BaseModel):
+    snapshot_date: str  # ISO date string
+    total_assets: float
+    total_liabilities: float
+    net_worth: float
+
+
+@router.get("/networth-trend", response_model=list[NetWorthPoint])
+async def networth_trend(db: AsyncSession = Depends(get_db)):
+    """净资产趋势：按快照日期聚合（需要 ≥2 个月快照才有意义）"""
+    from ..models import Account
+    # Get all unique snapshot dates
+    dates_r = await db.execute(
+        select(AccountSnapshot.snapshot_date).distinct().order_by(AccountSnapshot.snapshot_date)
+    )
+    dates = [row[0] for row in dates_r.all()]
+
+    if len(dates) < 2:
+        return []
+
+    # Get accounts to know which are liabilities
+    acc_r = await db.execute(select(Account))
+    accounts = {a.id: a for a in acc_r.scalars().all()}
+
+    result = []
+    for d in dates:
+        snap_r = await db.execute(
+            select(AccountSnapshot).where(AccountSnapshot.snapshot_date == d)
+        )
+        snaps = snap_r.scalars().all()
+
+        asset_cats = {"资金账户", "充值账户", "投资理财"}
+        liab_cats  = {"信用卡", "债务"}
+        assets = sum(s.balance for s in snaps if accounts.get(s.account_id) and accounts[s.account_id].category in asset_cats)
+        liabs  = sum(s.balance for s in snaps if accounts.get(s.account_id) and accounts[s.account_id].category in liab_cats)
+        result.append(NetWorthPoint(
+            snapshot_date=str(d),
+            total_assets=round(assets, 2),
+            total_liabilities=round(liabs, 2),
+            net_worth=round(assets - liabs, 2),
+        ))
+    return result

@@ -12,6 +12,8 @@ import {
   type MerchantItem,
   type StatCompareValue,
   type AnnualReport,
+  type AllocationReport,
+  type NetWorthPoint,
 } from '../api'
 
 const COLORS = [
@@ -92,7 +94,7 @@ function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewT
           <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={2} dataKey="total">
             {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
           </Pie>
-          <Tooltip formatter={(v: number) => [`¥${v.toFixed(2)}`, '']} />
+          <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(2)}`, '']} />
         </PieChart>
       </ResponsiveContainer>
 
@@ -287,6 +289,10 @@ export default function StatsPage() {
   const [annualLoading, setAnnualLoading] = useState(false)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [assetLoading, setAssetLoading] = useState(false)
+  const [allocationData, setAllocationData] = useState<AllocationReport | null>(null)
+  const [allocationLoading, setAllocationLoading] = useState(false)
+  const [networthTrend, setNetworthTrend] = useState<NetWorthPoint[]>([])
+  const [snapshotTaking, setSnapshotTaking] = useState(false)
 
   const isCurrentMonth = year === now.year() && month === now.month() + 1
 
@@ -326,6 +332,15 @@ export default function StatsPage() {
     accountApi.list().then(r => setAccounts(r.data)).finally(() => setAssetLoading(false))
   }, [topTab])
 
+  useEffect(() => {
+    if (topTab !== 'allocation') return
+    setAllocationLoading(true)
+    Promise.all([
+      statsApi.allocation().then(r => setAllocationData(r.data)),
+      statsApi.networthTrend().then(r => setNetworthTrend(r.data)),
+    ]).finally(() => setAllocationLoading(false))
+  }, [topTab])
+
   const TOP_TABS: { key: TopTab; label: string }[] = [
     { key: 'monthly', label: '月度' },
     { key: 'annual', label: '年度' },
@@ -338,10 +353,6 @@ export default function StatsPage() {
     { key: 'tag', label: '标签' },
     { key: 'merchant', label: 'TOP 商户' },
   ]
-  const PLACEHOLDER_LABELS: Partial<Record<TopTab, string>> = {
-    asset: '资产负债表', allocation: '配置分析',
-  }
-
   return (
     <div className="page-content" style={{ padding: 0 }}>
       {/* Top-level tabs */}
@@ -442,7 +453,7 @@ export default function StatsPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tickFormatter={m => `${m}月`} tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : `${v}`} />
-                    <Tooltip formatter={(v: number, name: string) => [`¥${v.toFixed(0)}`, name === 'income' ? '收入' : name === 'expense' ? '支出' : '结余']} />
+                    <Tooltip formatter={(v: unknown, name: unknown) => [`¥${(v as number).toFixed(0)}`, name === 'income' ? '收入' : name === 'expense' ? '支出' : '结余']} />
                     <Legend formatter={k => k === 'income' ? '收入' : k === 'expense' ? '支出' : '结余'} wrapperStyle={{ fontSize: 11 }} />
                     <Bar dataKey="income" fill="#4caf50" radius={[2, 2, 0, 0]} />
                     <Bar dataKey="expense" fill="#f44336" radius={[2, 2, 0, 0]} />
@@ -615,7 +626,7 @@ export default function StatsPage() {
                         <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value" nameKey="name">
                           {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                         </Pie>
-                        <Tooltip formatter={(v: number) => [`¥${v.toFixed(2)}`, '']} />
+                        <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(2)}`, '']} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                       </PieChart>
                     </ResponsiveContainer>
@@ -649,11 +660,115 @@ export default function StatsPage() {
         </div>
       )}
 
-      {/* Allocation placeholder */}
+      {/* Allocation tab */}
       {topTab === 'allocation' && (
-        <div className="empty-state" style={{ paddingTop: 80 }}>
-          <div className="empty-icon">🚧</div>
-          <p>配置分析即将上线</p>
+        <div style={{ padding: '12px 16px 80px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {allocationLoading ? (
+            <div style={{ textAlign: 'center', padding: '60px 0', color: '#aaa', fontSize: 14 }}>加载中…</div>
+          ) : (
+            <>
+              {/* Net worth trend */}
+              <div className="card" style={{ padding: '14px 16px' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>净资产趋势</div>
+                {networthTrend.length >= 2 ? (
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={networthTrend.map(p => ({ name: p.snapshot_date.slice(0, 7), 净资产: +(p.net_worth / 10000).toFixed(2) }))} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#aaa' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: '#aaa' }} axisLine={false} tickLine={false} unit="万" width={36} />
+                      <Tooltip formatter={(v: unknown) => [`¥${((v as number) * 10000).toFixed(0)}`, '净资产']} labelStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="净资产" fill="#4CAF50" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div style={{ padding: '20px 0', textAlign: 'center', color: '#bbb', fontSize: 13 }}>
+                    数据积累 2 个月后展示趋势曲线
+                  </div>
+                )}
+                {/* Manual snapshot trigger */}
+                <button
+                  onClick={() => {
+                    setSnapshotTaking(true)
+                    statsApi.takeSnapshot()
+                      .then(r => {
+                        const d = r.data
+                        alert(`快照已生成：${d.accounts} 个账户，${d.holdings} 个持仓`)
+                        // refresh trend
+                        statsApi.networthTrend().then(r2 => setNetworthTrend(r2.data))
+                      })
+                      .catch(() => alert('快照生成失败'))
+                      .finally(() => setSnapshotTaking(false))
+                  }}
+                  disabled={snapshotTaking}
+                  style={{
+                    marginTop: 12, width: '100%', padding: '8px 0', border: '1px solid #e0e0e0',
+                    borderRadius: 8, background: '#fafafa', color: '#666', fontSize: 13, cursor: 'pointer',
+                  }}
+                >
+                  {snapshotTaking ? '生成中…' : '📷 立即生成快照'}
+                </button>
+              </div>
+
+              {/* Allocation breakdown */}
+              {allocationData && allocationData.total > 0 ? (
+                <>
+                  <div className="card" style={{ padding: '14px 16px' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 4 }}>资产配置现状</div>
+                    <div style={{ fontSize: 11, color: '#aaa', marginBottom: 10 }}>
+                      总持仓市值 ¥{allocationData.total.toFixed(2)}（仅统计投资持仓）
+                    </div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <PieChart>
+                        <Pie
+                          data={allocationData.items}
+                          dataKey="total"
+                          nameKey="label"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          innerRadius={44}
+                          paddingAngle={2}
+                        >
+                          {allocationData.items.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(2)}`, '']} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    {allocationData.items.map((item, i) => (
+                      <div key={item.risk_class} style={{
+                        display: 'flex', alignItems: 'center', padding: '12px 14px', gap: 10,
+                        borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
+                      }}>
+                        <div style={{
+                          width: 10, height: 10, borderRadius: '50%',
+                          background: COLORS[i % COLORS.length], flexShrink: 0,
+                        }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: 14, color: '#333' }}>{item.label}</span>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{item.total.toFixed(2)}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ flex: 1, height: 3, background: '#f0f0f0', borderRadius: 2 }}>
+                              <div style={{ width: `${item.percentage}%`, height: '100%', background: COLORS[i % COLORS.length], borderRadius: 2 }} />
+                            </div>
+                            <span style={{ fontSize: 11, color: '#aaa', minWidth: 36, textAlign: 'right' }}>{item.percentage.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                !allocationLoading && <EmptyState text="暂无持仓数据，请先在投资页添加持仓并设置风险等级" />
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import Holding, RecurringRule, RecurringExecution, Transaction, transaction_tags
+from app.models import Holding, Account, AccountSnapshot, HoldingSnapshot, RecurringRule, RecurringExecution, Transaction, transaction_tags
 from app.price_service import fetch_price
 
 logger = logging.getLogger(__name__)
@@ -234,6 +234,104 @@ async def startup_backfill_recurring() -> None:
         logger.error("开机补漏（循环规则）异常: %s", e)
 
 
+async def take_snapshots() -> tuple[int, int]:
+    """每月 1 日 00:30 — 为所有账户和持仓生成月度快照"""
+    from datetime import date as _date
+    from sqlalchemy import func as sa_func, insert as sa_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from app.models import ReimbursementRecord
+
+    today = _date.today()
+    logger.info("资产快照：开始生成 %s", today)
+
+    async with async_session() as db:
+        # ── 账户快照 ──────────────────────────────────────────────────────
+        acc_r = await db.execute(select(Account))
+        accounts = acc_r.scalars().all()
+
+        # 计算每个账户的流水 delta
+        from sqlalchemy import case as sa_case
+        from app.models import Transaction as Txn
+
+        delta: dict[int, float] = {a.id: 0.0 for a in accounts}
+        out_r = await db.execute(
+            select(Txn.account_id, Txn.type, sa_func.sum(Txn.amount))
+            .where(Txn.account_id.isnot(None))
+            .group_by(Txn.account_id, Txn.type)
+        )
+        for aid, ttype, total in out_r:
+            if ttype == "income":
+                delta[aid] = delta.get(aid, 0) + float(total or 0)
+            else:
+                delta[aid] = delta.get(aid, 0) - float(total or 0)
+
+        in_r = await db.execute(
+            select(Txn.to_account_id, sa_func.sum(Txn.amount))
+            .where(Txn.to_account_id.isnot(None), Txn.type == "transfer")
+            .group_by(Txn.to_account_id)
+        )
+        for aid, total in in_r:
+            delta[aid] = delta.get(aid, 0) + float(total or 0)
+
+        reim_r = await db.execute(
+            select(ReimbursementRecord.to_account_id, sa_func.sum(ReimbursementRecord.total_amount))
+            .where(ReimbursementRecord.to_account_id.isnot(None))
+            .group_by(ReimbursementRecord.to_account_id)
+        )
+        for aid, total in reim_r:
+            delta[aid] = delta.get(aid, 0) + float(total or 0)
+
+        # 投资理财账户持仓市值
+        holding_val: dict[int, float] = {}
+        invest_ids = [a.id for a in accounts if a.category == "投资理财"]
+        if invest_ids:
+            hv_r = await db.execute(
+                select(Holding.account_id, sa_func.sum(Holding.current_value))
+                .where(Holding.account_id.in_(invest_ids))
+                .group_by(Holding.account_id)
+            )
+            for aid, total in hv_r:
+                if aid is not None:
+                    holding_val[aid] = float(total or 0)
+
+        for a in accounts:
+            if a.category == "投资理财":
+                cb = round(holding_val.get(a.id, 0), 2)
+            else:
+                cb = round(a.balance + delta.get(a.id, 0) + holding_val.get(a.id, 0), 2)
+            try:
+                await db.execute(
+                    sqlite_insert(AccountSnapshot).values(
+                        account_id=a.id, snapshot_date=today, balance=cb
+                    ).on_conflict_do_nothing()
+                )
+            except Exception as e:
+                logger.warning("账户快照写入失败 [%s]: %s", a.name, e)
+
+        # ── 持仓快照 ──────────────────────────────────────────────────────
+        h_r = await db.execute(select(Holding))
+        holdings = h_r.scalars().all()
+        for h in holdings:
+            try:
+                await db.execute(
+                    sqlite_insert(HoldingSnapshot).values(
+                        holding_id=h.id,
+                        snapshot_date=today,
+                        shares=h.shares,
+                        price=h.current_price,
+                        value=h.current_value,
+                        cost_total=round(h.shares * h.cost_price, 2),
+                    ).on_conflict_do_nothing()
+                )
+            except Exception as e:
+                logger.warning("持仓快照写入失败 [%s]: %s", h.name, e)
+
+        await db.commit()
+
+    logger.info("资产快照完成：%d 个账户，%d 个持仓", len(accounts), len(holdings))
+    return len(accounts), len(holdings)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """创建并配置 APScheduler（AsyncIOScheduler，Asia/Shanghai 时区）"""
     tz = "Asia/Shanghai"
@@ -264,6 +362,15 @@ def create_scheduler() -> AsyncIOScheduler:
         id="recurring_rules_0005",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+
+    # 每月 1 日 00:30 — 生成资产快照
+    scheduler.add_job(
+        take_snapshots,
+        CronTrigger(day=1, hour=0, minute=30, timezone=tz),
+        id="asset_snapshots_monthly",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
 
     return scheduler

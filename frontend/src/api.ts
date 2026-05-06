@@ -578,6 +578,25 @@ export interface AnnualReport {
   members: AnnualMemberItem[]
 }
 
+export interface AllocationItem {
+  risk_class: string
+  label: string
+  total: number
+  percentage: number
+}
+
+export interface AllocationReport {
+  total: number
+  items: AllocationItem[]
+}
+
+export interface NetWorthPoint {
+  snapshot_date: string
+  total_assets: number
+  total_liabilities: number
+  net_worth: number
+}
+
 export const statsApi = {
   monthlySummary: (year: number, month: number) =>
     api.get<MonthlySummaryStats>('/api/stats/monthly-summary', { params: { year, month } }),
@@ -591,6 +610,12 @@ export const statsApi = {
     api.get<MerchantItem[]>('/api/stats/top-merchants', { params: { year, month, type, limit } }),
   annual: (year: number, type: string) =>
     api.get<AnnualReport>('/api/stats/annual', { params: { year, type } }),
+  allocation: () =>
+    api.get<AllocationReport>('/api/stats/allocation'),
+  networthTrend: () =>
+    api.get<NetWorthPoint[]>('/api/stats/networth-trend'),
+  takeSnapshot: () =>
+    api.post<{ message: string; accounts: number; holdings: number }>('/api/stats/snapshots/take'),
 }
 
 export const recurringRuleApi = {

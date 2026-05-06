@@ -185,6 +185,7 @@ class Holding(Base):
     current_value = Column(Float, default=0)            # 最新市值（current_price * shares）
     member_id = Column(Integer, ForeignKey("family_members.id"), nullable=True)  # 归属家庭成员（NULL=未指定/共有）
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)  # 绑定的投资理财账户（可选）
+    risk_class = Column(String(20), default="other")  # cash/bond/mixed/equity/realestate/other
     note = Column(String(500), default="")
     price_updated_at = Column(DateTime, nullable=True)  # 行情最后更新时间
     created_at = Column(DateTime, server_default=func.now())
@@ -258,3 +259,36 @@ class RecurringExecution(Base):
     executed_at = Column(DateTime, server_default=func.now())
 
     rule = relationship("RecurringRule", back_populates="executions")
+
+
+# ─── 资产快照 ──────────────────────────────────────────────────────────────────
+
+class AccountSnapshot(Base):
+    """每月账户余额快照（每月 1 日 00:30 自动生成）"""
+    __tablename__ = "account_snapshots"
+    __table_args__ = (UniqueConstraint("account_id", "snapshot_date", name="uq_account_snapshot"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    balance = Column(Float, nullable=False)  # current_balance at snapshot time
+    created_at = Column(DateTime, server_default=func.now())
+
+    account = relationship("Account")
+
+
+class HoldingSnapshot(Base):
+    """每月持仓快照（每月 1 日 00:30 自动生成）"""
+    __tablename__ = "holding_snapshots"
+    __table_args__ = (UniqueConstraint("holding_id", "snapshot_date", name="uq_holding_snapshot"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    holding_id = Column(Integer, ForeignKey("holdings.id", ondelete="CASCADE"), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    shares = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    value = Column(Float, nullable=False)       # shares * price
+    cost_total = Column(Float, nullable=False)  # shares * cost_price
+    created_at = Column(DateTime, server_default=func.now())
+
+    holding = relationship("Holding")
