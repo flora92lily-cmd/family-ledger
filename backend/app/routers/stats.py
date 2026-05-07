@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, extract, case
+from sqlalchemy import select, func, extract, case, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -40,19 +40,30 @@ def _prev_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-async def _total(db: AsyncSession, year: int, month: int, type_: str) -> float:
-    r = await db.execute(
+def _member_filter(query, member_id: Optional[int]):
+    """Apply optional member filter to a query."""
+    if member_id is None:
+        return query
+    if member_id == -1:
+        return query.where(Transaction.member_id.is_(None))
+    return query.where(Transaction.member_id == member_id)
+
+
+async def _total(db: AsyncSession, year: int, month: int, type_: str, member_id: Optional[int] = None) -> float:
+    q = (
         select(func.sum(_eff(type_))).where(
             extract("year", Transaction.date) == year,
             extract("month", Transaction.date) == month,
             Transaction.type == type_,
         )
     )
+    q = _member_filter(q, member_id)
+    r = await db.execute(q)
     return float(r.scalar() or 0)
 
 
-async def _cat_totals(db: AsyncSession, year: int, month: int, type_: str) -> dict[int, float]:
-    r = await db.execute(
+async def _cat_totals(db: AsyncSession, year: int, month: int, type_: str, member_id: Optional[int] = None) -> dict[int, float]:
+    q = (
         select(Transaction.category_id, func.sum(_eff(type_)).label("total"))
         .where(
             extract("year", Transaction.date) == year,
@@ -60,8 +71,9 @@ async def _cat_totals(db: AsyncSession, year: int, month: int, type_: str) -> di
             Transaction.type == type_,
             Transaction.category_id.isnot(None),
         )
-        .group_by(Transaction.category_id)
     )
+    q = _member_filter(q, member_id)
+    r = await db.execute(q.group_by(Transaction.category_id))
     return {row[0]: float(row[1] or 0) for row in r.all()}
 
 
@@ -192,23 +204,62 @@ class AnnualReport(BaseModel):
     members: list[AnnualMemberItem]
 
 
+class DailyItem(BaseModel):
+    day: int
+    income: float
+    expense: float
+    balance: float
+    transfer_count: int
+
+
+class DailyReport(BaseModel):
+    year: int
+    month: int
+    days: list[DailyItem]
+    avg_daily_income: float
+    avg_daily_expense: float
+
+
+class DrillDownTransaction(BaseModel):
+    id: int
+    amount: float
+    type: str
+    description: str
+    counterparty: str
+    date: str
+    source: str
+    category_id: Optional[int]
+    category_name: Optional[str]
+    category_icon: Optional[str]
+    account_id: Optional[int]
+    account_name: Optional[str]
+    account_icon: Optional[str]
+    to_account_id: Optional[int]
+    to_account_name: Optional[str]
+    to_account_icon: Optional[str]
+    member_id: Optional[int]
+    member_name: Optional[str]
+    member_avatar: Optional[str]
+
+
 # ─── endpoints ───────────────────────────────────────────────────────────────
 
 @router.get("/monthly-summary", response_model=MonthlySummaryStats)
 async def monthly_summary(
     year: int = Query(...),
     month: int = Query(...),
+    member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     py, pm = _prev_month(year, month)
 
-    cur_inc = await _total(db, year, month, "income")
-    pm_inc  = await _total(db, py, pm, "income")
-    yy_inc  = await _total(db, year - 1, month, "income")
+    cur_inc = await _total(db, year, month, "income", member_id)
+    pm_inc  = await _total(db, py, pm, "income", member_id)
+    yy_inc  = await _total(db, year - 1, month, "income", member_id)
 
-    cur_exp = await _total(db, year, month, "expense")
-    pm_exp  = await _total(db, py, pm, "expense")
-    yy_exp  = await _total(db, year - 1, month, "expense")
+    cur_exp = await _total(db, year, month, "expense", member_id)
+    pm_exp  = await _total(db, py, pm, "expense", member_id)
+    yy_exp  = await _total(db, year - 1, month, "expense", member_id)
 
     cur_bal = cur_inc - cur_exp
     pm_bal  = pm_inc  - pm_exp
@@ -244,13 +295,14 @@ async def category_breakdown(
     year: int = Query(...),
     month: int = Query(...),
     type: str = Query("expense"),
+    member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     py, pm = _prev_month(year, month)
 
-    cur    = await _cat_totals(db, year, month, type)
-    prev_m = await _cat_totals(db, py, pm, type)
-    prev_y = await _cat_totals(db, year - 1, month, type)
+    cur    = await _cat_totals(db, year, month, type, member_id)
+    prev_m = await _cat_totals(db, py, pm, type, member_id)
+    prev_y = await _cat_totals(db, year - 1, month, type, member_id)
 
     all_ids = set(cur) | set(prev_m) | set(prev_y)
     if not all_ids:
@@ -385,10 +437,11 @@ async def tag_breakdown(
     year: int = Query(...),
     month: int = Query(...),
     type: str = Query("expense"),
+    member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     # 获取本期每笔交易的有效金额
-    txn_r = await db.execute(
+    q = (
         select(Transaction.id, _eff(type).label("eff"))
         .where(
             extract("year", Transaction.date) == year,
@@ -396,6 +449,8 @@ async def tag_breakdown(
             Transaction.type == type,
         )
     )
+    q = _member_filter(q, member_id)
+    txn_r = await db.execute(q)
     txn_amounts: dict[int, float] = {row.id: float(row.eff or 0) for row in txn_r.all()}
     if not txn_amounts:
         return []
@@ -461,21 +516,22 @@ async def top_merchants(
     month: int = Query(...),
     type: str = Query("expense"),
     limit: int = Query(10, ge=1, le=50),
+    member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     eff = _eff(type)
 
     # 本期总额（用于计算占比）
-    total_r = await db.execute(
-        select(func.sum(eff)).where(
-            extract("year", Transaction.date) == year,
-            extract("month", Transaction.date) == month,
-            Transaction.type == type,
-        )
+    total_q = select(func.sum(eff)).where(
+        extract("year", Transaction.date) == year,
+        extract("month", Transaction.date) == month,
+        Transaction.type == type,
     )
+    total_q = _member_filter(total_q, member_id)
+    total_r = await db.execute(total_q)
     all_total = float(total_r.scalar() or 0) or 1
 
-    r = await db.execute(
+    q = (
         select(
             Transaction.counterparty,
             func.sum(eff).label("total"),
@@ -492,6 +548,8 @@ async def top_merchants(
         .order_by(func.sum(eff).desc())
         .limit(limit)
     )
+    q = _member_filter(q, member_id)
+    r = await db.execute(q)
 
     return [
         MerchantItem(
@@ -509,13 +567,14 @@ async def top_merchants(
 async def annual_report(
     year: int = Query(...),
     type: str = Query("expense"),
+    member_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     eff_exp = _eff("expense")
     eff_inc = _eff("income")
 
     # Monthly trend
-    trend_r = await db.execute(
+    trend_q = (
         select(
             extract("month", Transaction.date).label("m"),
             func.sum(case((Transaction.type == "income", _eff("income")), else_=0)).label("inc"),
@@ -524,6 +583,8 @@ async def annual_report(
         .where(extract("year", Transaction.date) == year)
         .group_by(extract("month", Transaction.date))
     )
+    trend_q = _member_filter(trend_q, member_id)
+    trend_r = await db.execute(trend_q)
     trend_by_month: dict[int, tuple[float, float]] = {}
     for row in trend_r.all():
         trend_by_month[int(row[0])] = (float(row[1] or 0), float(row[2] or 0))
@@ -540,7 +601,7 @@ async def annual_report(
 
     # Category totals for the requested type
     eff = _eff(type)
-    cat_r = await db.execute(
+    cat_q = (
         select(Transaction.category_id, func.sum(eff).label("total"))
         .where(
             extract("year", Transaction.date) == year,
@@ -549,6 +610,8 @@ async def annual_report(
         )
         .group_by(Transaction.category_id)
     )
+    cat_q = _member_filter(cat_q, member_id)
+    cat_r = await db.execute(cat_q)
     cat_totals: dict[int, float] = {row[0]: float(row[1] or 0) for row in cat_r.all()}
 
     all_cat_ids = set(cat_totals)
@@ -584,31 +647,32 @@ async def annual_report(
             ],
         ))
 
-    # Member totals
-    mem_r = await db.execute(
-        select(Transaction.member_id, func.sum(eff).label("total"))
-        .where(extract("year", Transaction.date) == year, Transaction.type == type)
-        .group_by(Transaction.member_id)
-    )
-    mem_rows = {row[0]: float(row[1] or 0) for row in mem_r.all()}
-    all_members_r = await db.execute(select(FamilyMember).order_by(FamilyMember.sort_order, FamilyMember.id))
-    members_by_id = {m.id: m for m in all_members_r.scalars().all()}
-    grand_mem = sum(mem_rows.values()) or 1
-
+    # Member totals (only when no member_id filter; when filtered, skip member breakdown)
     members: list[AnnualMemberItem] = []
-    if None in mem_rows:
-        t = mem_rows[None]
-        members.append(AnnualMemberItem(
-            member_id=None, member_name="未指定成员", member_avatar="👤",
-            total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
-        ))
-    for mid, t in sorted([(k, v) for k, v in mem_rows.items() if k is not None], key=lambda x: x[1], reverse=True):
-        m = members_by_id.get(mid)
-        members.append(AnnualMemberItem(
-            member_id=mid, member_name=m.name if m else f"成员{mid}",
-            member_avatar=m.avatar if m else "👤",
-            total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
-        ))
+    if member_id is None:
+        mem_r = await db.execute(
+            select(Transaction.member_id, func.sum(eff).label("total"))
+            .where(extract("year", Transaction.date) == year, Transaction.type == type)
+            .group_by(Transaction.member_id)
+        )
+        mem_rows = {row[0]: float(row[1] or 0) for row in mem_r.all()}
+        all_members_r = await db.execute(select(FamilyMember).order_by(FamilyMember.sort_order, FamilyMember.id))
+        members_by_id = {m.id: m for m in all_members_r.scalars().all()}
+        grand_mem = sum(mem_rows.values()) or 1
+
+        if None in mem_rows:
+            t = mem_rows[None]
+            members.append(AnnualMemberItem(
+                member_id=None, member_name="未指定成员", member_avatar="👤",
+                total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
+            ))
+        for mid, t in sorted([(k, v) for k, v in mem_rows.items() if k is not None], key=lambda x: x[1], reverse=True):
+            m = members_by_id.get(mid)
+            members.append(AnnualMemberItem(
+                member_id=mid, member_name=m.name if m else f"成员{mid}",
+                member_avatar=m.avatar if m else "👤",
+                total=round(t, 2), percentage=round(t / grand_mem * 100, 1),
+            ))
 
     return AnnualReport(year=year, trend=trend, categories=categories, members=members)
 
@@ -716,3 +780,133 @@ async def networth_trend(db: AsyncSession = Depends(get_db)):
             net_worth=round(assets - liabs, 2),
         ))
     return result
+
+
+# ─── 日报 ────────────────────────────────────────────────────────────────────
+
+@router.get("/daily-report", response_model=DailyReport)
+async def daily_report(
+    year: int = Query(...),
+    month: int = Query(...),
+    type: str = Query("expense"),
+    member_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """所选月每日收支明细 + 日均（含转账笔数）"""
+    import calendar
+    eff_exp = _eff("expense")
+    eff_inc = _eff("income")
+
+    q = (
+        select(
+            func.cast(func.strftime('%d', Transaction.date), Integer).label("d"),
+            func.sum(case((Transaction.type == "income", eff_inc), else_=0)).label("inc"),
+            func.sum(case((Transaction.type == "expense", eff_exp), else_=0)).label("exp"),
+            func.sum(case((Transaction.type == "transfer", 1), else_=0)).label("xfer"),
+        )
+        .where(
+            extract("year", Transaction.date) == year,
+            extract("month", Transaction.date) == month,
+        )
+        .group_by(func.cast(func.strftime('%d', Transaction.date), Integer))
+    )
+    q = _member_filter(q, member_id)
+    r = await db.execute(q)
+
+    by_day: dict[int, tuple[float, float, int]] = {}
+    for row in r.all():
+        by_day[int(row[0])] = (float(row[1] or 0), float(row[2] or 0), int(row[3] or 0))
+
+    _, days_in_month = calendar.monthrange(year, month)
+    days = []
+    total_inc = total_exp = 0.0
+    for d in range(1, days_in_month + 1):
+        inc, exp, xfer = by_day.get(d, (0, 0, 0))
+        total_inc += inc
+        total_exp += exp
+        # Only include days with any activity
+        if inc > 0 or exp > 0 or xfer > 0:
+            days.append(DailyItem(day=d, income=round(inc, 2), expense=round(exp, 2), balance=round(inc - exp, 2), transfer_count=xfer))
+
+    nz = days_in_month or 1
+    return DailyReport(
+        year=year, month=month, days=days,
+        avg_daily_income=round(total_inc / nz, 2),
+        avg_daily_expense=round(total_exp / nz, 2),
+    )
+
+
+# ─── 下钻账单 ─────────────────────────────────────────────────────────────────
+
+@router.get("/drill-down", response_model=list[DrillDownTransaction])
+async def drill_down(
+    year: int = Query(...),
+    month: Optional[int] = Query(None),
+    type: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    tag_id: Optional[int] = Query(None),
+    counterparty: Optional[str] = Query(None),
+    member_id: Optional[int] = Query(None),
+    day: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """根据筛选条件返回具体交易列表，支持下钻"""
+    from sqlalchemy.orm import joinedload
+
+    q = select(Transaction).where(
+        extract("year", Transaction.date) == year,
+    )
+
+    if type is not None:
+        q = q.where(Transaction.type == type)
+
+    if month is not None:
+        q = q.where(extract("month", Transaction.date) == month)
+
+    if day is not None:
+        q = q.where(func.cast(func.strftime('%d', Transaction.date), Integer) == day)
+
+    if category_id is not None:
+        # Include children of the parent category
+        cat_r = await db.execute(select(Category.id).where(Category.parent_id == category_id))
+        child_ids = [row[0] for row in cat_r.all()]
+        all_ids = [category_id] + child_ids
+        q = q.where(Transaction.category_id.in_(all_ids))
+
+    if tag_id is not None:
+        q = q.where(Transaction.id.in_(
+            select(transaction_tags.c.transaction_id).where(transaction_tags.c.tag_id == tag_id)
+        ))
+
+    if counterparty is not None:
+        q = q.where(Transaction.counterparty == counterparty)
+
+    q = _member_filter(q, member_id)
+    q = q.order_by(Transaction.date.desc(), Transaction.id.desc()).limit(200)
+
+    r = await db.execute(
+        q.options(
+            joinedload(Transaction.category),
+            joinedload(Transaction.account),
+            joinedload(Transaction.to_account),
+            joinedload(Transaction.member),
+        )
+    )
+    txns = r.unique().scalars().all()
+
+    return [
+        DrillDownTransaction(
+            id=t.id, amount=t.amount, type=t.type,
+            description=t.description or "", counterparty=t.counterparty or "",
+            date=str(t.date), source=t.source or "",
+            category_id=t.category_id, category_name=t.category.name if t.category else None,
+            category_icon=t.category.icon if t.category else None,
+            account_id=t.account_id, account_name=t.account.name if t.account else None,
+            account_icon=t.account.icon if t.account else None,
+            to_account_id=t.to_account_id, to_account_name=t.to_account.name if t.to_account else None,
+            to_account_icon=t.to_account.icon if t.to_account else None,
+            member_id=t.member_id, member_name=t.member.name if t.member else None,
+            member_avatar=t.member.avatar if t.member else None,
+        )
+        for t in txns
+    ]

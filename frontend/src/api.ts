@@ -597,19 +597,72 @@ export interface NetWorthPoint {
   net_worth: number
 }
 
+export interface DailyItem {
+  day: number
+  income: number
+  expense: number
+  balance: number
+  transfer_count: number
+}
+
+export interface DailyReport {
+  year: number
+  month: number
+  days: DailyItem[]
+  avg_daily_income: number
+  avg_daily_expense: number
+}
+
+export interface DrillDownTransaction {
+  id: number
+  amount: number
+  type: string
+  description: string
+  counterparty: string
+  date: string
+  source: string
+  category_id: number | null
+  category_name: string | null
+  category_icon: string | null
+  account_id: number | null
+  account_name: string | null
+  account_icon: string | null
+  to_account_id: number | null
+  to_account_name: string | null
+  to_account_icon: string | null
+  member_id: number | null
+  member_name: string | null
+  member_avatar: string | null
+}
+
 export const statsApi = {
-  monthlySummary: (year: number, month: number) =>
-    api.get<MonthlySummaryStats>('/api/stats/monthly-summary', { params: { year, month } }),
-  categoryBreakdown: (year: number, month: number, type: string) =>
-    api.get<CategoryBreakdownItem[]>('/api/stats/category-breakdown', { params: { year, month, type } }),
+  monthlySummary: (year: number, month: number, member_id?: number | null) =>
+    api.get<MonthlySummaryStats>('/api/stats/monthly-summary', { params: { year, month, ...(member_id != null ? { member_id } : {}) } }),
+  categoryBreakdown: (year: number, month: number, type: string, member_id?: number | null) =>
+    api.get<CategoryBreakdownItem[]>('/api/stats/category-breakdown', { params: { year, month, type, ...(member_id != null ? { member_id } : {}) } }),
   memberBreakdown: (year: number, month: number, type: string) =>
     api.get<MemberBreakdownItem[]>('/api/stats/member-breakdown', { params: { year, month, type } }),
-  tagBreakdown: (year: number, month: number, type: string) =>
-    api.get<TagBreakdownGroup[]>('/api/stats/tag-breakdown', { params: { year, month, type } }),
-  topMerchants: (year: number, month: number, type: string, limit = 10) =>
-    api.get<MerchantItem[]>('/api/stats/top-merchants', { params: { year, month, type, limit } }),
-  annual: (year: number, type: string) =>
-    api.get<AnnualReport>('/api/stats/annual', { params: { year, type } }),
+  tagBreakdown: (year: number, month: number, type: string, member_id?: number | null) =>
+    api.get<TagBreakdownGroup[]>('/api/stats/tag-breakdown', { params: { year, month, type, ...(member_id != null ? { member_id } : {}) } }),
+  topMerchants: (year: number, month: number, type: string, limit = 10, member_id?: number | null) =>
+    api.get<MerchantItem[]>('/api/stats/top-merchants', { params: { year, month, type, limit, ...(member_id != null ? { member_id } : {}) } }),
+  annual: (year: number, type: string, member_id?: number | null) =>
+    api.get<AnnualReport>('/api/stats/annual', { params: { year, type, ...(member_id != null ? { member_id } : {}) } }),
+  dailyReport: (year: number, month: number, type: string, member_id?: number | null) =>
+    api.get<DailyReport>('/api/stats/daily-report', { params: { year, month, type, ...(member_id != null ? { member_id } : {}) } }),
+  drillDown: (year: number, month: number | null, type: string | null, params: { category_id?: number; tag_id?: number; counterparty?: string; member_id?: number | null; day?: number }) =>
+    api.get<DrillDownTransaction[]>('/api/stats/drill-down', {
+      params: {
+        year,
+        ...(month != null ? { month } : {}),
+        ...(type != null ? { type } : {}),
+        ...(params.category_id != null ? { category_id: params.category_id } : {}),
+        ...(params.tag_id != null ? { tag_id: params.tag_id } : {}),
+        ...(params.counterparty != null ? { counterparty: params.counterparty } : {}),
+        ...(params.member_id != null ? { member_id: params.member_id } : {}),
+        ...(params.day != null ? { day: params.day } : {}),
+      },
+    }),
   allocation: () =>
     api.get<AllocationReport>('/api/stats/allocation'),
   networthTrend: () =>

@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, memo } from 'react'
 import dayjs from 'dayjs'
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
 import {
   statsApi,
   accountApi,
+  memberApi,
+  transactionApi,
+  type FamilyMember,
   type Account,
   type MonthlySummaryStats,
   type CategoryBreakdownItem,
-  type MemberBreakdownItem,
   type TagBreakdownGroup,
   type MerchantItem,
   type StatCompareValue,
   type AnnualReport,
   type AllocationReport,
   type NetWorthPoint,
+  type DailyReport,
+  type DrillDownTransaction,
 } from '../api'
+import { useNavigate } from 'react-router-dom'
 
 const COLORS = [
   '#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336',
@@ -23,7 +28,7 @@ const COLORS = [
 ]
 
 type TopTab = 'monthly' | 'annual' | 'asset' | 'allocation'
-type SubTab = 'category' | 'member' | 'tag' | 'merchant'
+type SubTab = 'category' | 'daily' | 'tag' | 'merchant'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +41,19 @@ function pctColor(pct: number | null | undefined, isExpense: boolean): string {
   if (pct == null) return '#bbb'
   const up = pct > 0
   return isExpense ? (up ? '#f44336' : '#4caf50') : (up ? '#4caf50' : '#f44336')
+}
+
+const RADIAN = Math.PI / 180
+function renderPieLabel({ cx, cy, midAngle, outerRadius, percent, name }: any) {
+  const radius = outerRadius + 28
+  const x = cx + radius * Math.cos(-midAngle * RADIAN)
+  const y = cy + radius * Math.sin(-midAngle * RADIAN)
+  const pct = (percent * 100).toFixed(1)
+  return (
+    <text x={x} y={y} fill="#666" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
+      {name} {pct}%
+    </text>
+  )
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -81,7 +99,7 @@ function EmptyState({ text }: { text: string }) {
   )
 }
 
-function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewType: string }) {
+const CategoryView = memo(function CategoryView({ data, viewType, onDrillDown }: { data: CategoryBreakdownItem[]; viewType: string; onDrillDown: (params: {category_id?: number; tag_id?: number; counterparty?: string; title: string}) => void }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const isExpense = viewType === 'expense'
 
@@ -89,9 +107,10 @@ function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewT
 
   return (
     <div>
-      <ResponsiveContainer width="100%" height={200}>
+      <ResponsiveContainer width="100%" height={260}>
         <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={2} dataKey="total">
+          <Pie data={data} cx="50%" cy="50%" innerRadius={50} outerRadius={90} paddingAngle={2} dataKey="total" nameKey="name"
+            label={renderPieLabel} labelLine={{ stroke: '#ccc', strokeWidth: 1 }}>
             {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
           </Pie>
           <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(2)}`, '']} />
@@ -104,18 +123,19 @@ function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewT
             <div
               style={{
                 display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 8,
-                cursor: cat.children.length > 0 ? 'pointer' : 'default',
-                borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
+                cursor: 'pointer', borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
               }}
-              onClick={() => cat.children.length > 0 && setExpanded(expanded === cat.id ? null : cat.id)}
+              onClick={() => cat.children.length > 0 ? setExpanded(expanded === cat.id ? null : cat.id) : onDrillDown({ category_id: cat.id, title: cat.name })}
             >
               <span style={{ fontSize: 18, flexShrink: 0 }}>{cat.icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                   <span style={{ fontSize: 14, color: '#333' }}>{cat.name}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {cat.children.length > 0 && (
-                      <span style={{ fontSize: 10, color: '#bbb' }}>{expanded === cat.id ? '▲' : '▼'}</span>
+                    {cat.children.length > 0 ? (
+                      <span style={{ fontSize: 10, color: '#4caf50', background: '#f0fdf4', padding: '1px 6px', borderRadius: 8 }}>下钻</span>
+                    ) : (
+                      <span style={{ fontSize: 10, color: '#aaa' }}>→</span>
                     )}
                     <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{cat.total.toFixed(2)}</span>
                   </div>
@@ -136,8 +156,8 @@ function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewT
             {expanded === cat.id && cat.children.map(child => (
               <div key={child.id} style={{
                 display: 'flex', alignItems: 'center', padding: '8px 14px 8px 42px', gap: 8,
-                background: '#fafafa', borderTop: '1px solid #f0f0f0',
-              }}>
+                background: '#fafafa', borderTop: '1px solid #f0f0f0', cursor: 'pointer',
+              }} onClick={(e) => { e.stopPropagation(); onDrillDown({ category_id: child.id, title: child.name }) }}>
                 <span style={{ fontSize: 16, flexShrink: 0 }}>{child.icon}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
@@ -158,40 +178,9 @@ function CategoryView({ data, viewType }: { data: CategoryBreakdownItem[]; viewT
       </div>
     </div>
   )
-}
+})
 
-function MemberView({ data, viewType }: { data: MemberBreakdownItem[]; viewType: string }) {
-  const isExpense = viewType === 'expense'
-  if (data.length === 0) return <EmptyState text="本月没有成员数据" />
-
-  return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      {data.map((m, i) => (
-        <div key={m.member_id ?? 'null'} style={{
-          display: 'flex', alignItems: 'center', padding: '12px 14px', gap: 10,
-          borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
-        }}>
-          <span style={{ fontSize: 22, flexShrink: 0 }}>{m.member_avatar}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontSize: 14, color: '#333' }}>{m.member_name}</span>
-              <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{m.total.toFixed(2)}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-              <div style={{ flex: 1, height: 4, background: '#f0f0f0', borderRadius: 2 }}>
-                <div style={{ width: `${m.percentage}%`, height: '100%', background: '#2196F3', borderRadius: 2 }} />
-              </div>
-              <span style={{ fontSize: 10, color: '#aaa', minWidth: 32, textAlign: 'right' }}>{m.percentage.toFixed(1)}%</span>
-            </div>
-            <PctBadge pct={m.prev_month_pct} label="环比" isExpense={isExpense} />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function TagView({ data }: { data: TagBreakdownGroup[] }) {
+const TagView = memo(function TagView({ data, onDrillDown }: { data: TagBreakdownGroup[]; onDrillDown: (params: {category_id?: number; tag_id?: number; counterparty?: string; title: string}) => void }) {
   if (data.length === 0) return <EmptyState text="本月没有标签数据" />
 
   return (
@@ -205,8 +194,8 @@ function TagView({ data }: { data: TagBreakdownGroup[] }) {
           {group.tags.map((tag, i) => (
             <div key={tag.tag_id} style={{
               display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 8,
-              borderTop: '1px solid #f0f0f0',
-            }}>
+              borderTop: '1px solid #f0f0f0', cursor: 'pointer',
+            }} onClick={() => onDrillDown({ tag_id: tag.tag_id, title: tag.tag_name })}>
               <span style={{ fontSize: 16, flexShrink: 0 }}>{tag.tag_icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -226,9 +215,9 @@ function TagView({ data }: { data: TagBreakdownGroup[] }) {
       ))}
     </div>
   )
-}
+})
 
-function MerchantView({ data }: { data: MerchantItem[] }) {
+const MerchantView = memo(function MerchantView({ data, onDrillDown }: { data: MerchantItem[]; onDrillDown: (params: {category_id?: number; tag_id?: number; counterparty?: string; title: string}) => void }) {
   if (data.length === 0) return <EmptyState text="本月没有商户数据" />
 
   return (
@@ -236,8 +225,8 @@ function MerchantView({ data }: { data: MerchantItem[] }) {
       {data.map((m, i) => (
         <div key={m.counterparty} style={{
           display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10,
-          borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
-        }}>
+          borderTop: i > 0 ? '1px solid #f5f5f5' : 'none', cursor: 'pointer',
+        }} onClick={() => onDrillDown({ counterparty: m.counterparty, title: m.counterparty })}>
           <div style={{
             width: 26, height: 26, borderRadius: '50%', background: COLORS[i % COLORS.length],
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -265,26 +254,74 @@ function MerchantView({ data }: { data: MerchantItem[] }) {
       ))}
     </div>
   )
-}
+})
+
+const DailyView = memo(function DailyView({ data, loading, viewType, onDrillDay, month }: { data: DailyReport | null; loading: boolean; viewType: string; onDrillDay: (day: number) => void; month: number }) {
+  if (loading) return <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
+  if (!data || data.days.length === 0) return <EmptyState text={`本月没有${viewType === 'expense' ? '支出' : '收入'}数据`} />
+
+  return (
+    <div>
+      {/* Daily averages */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <div style={{ flex: 1, padding: '8px 12px', background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 10, color: '#888' }}>日均收入</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#4caf50' }}>¥{data.avg_daily_income.toFixed(2)}</div>
+        </div>
+        <div style={{ flex: 1, padding: '8px 12px', background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 10, color: '#888' }}>日均支出</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#f44336' }}>¥{data.avg_daily_expense.toFixed(2)}</div>
+        </div>
+      </div>
+
+      {/* Daily table */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', padding: '8px 14px', background: '#fafafa', fontSize: 11, color: '#999', fontWeight: 600 }}>
+          <span style={{ width: 54, flexShrink: 0 }}>日期</span>
+          <span style={{ flex: 1, textAlign: 'right' }}>收入</span>
+          <span style={{ flex: 1, textAlign: 'right' }}>支出</span>
+          <span style={{ flex: 1, textAlign: 'right' }}>结余</span>
+          <span style={{ width: 36, flexShrink: 0, textAlign: 'right' }}></span>
+        </div>
+        {data.days.map((d, i) => (
+          <div key={d.day} style={{
+            display: 'flex', padding: '7px 14px', fontSize: 13, color: '#333',
+            borderTop: i > 0 ? '1px solid #f5f5f5' : 'none', cursor: 'pointer',
+          }} onClick={() => onDrillDay(d.day)}>
+            <span style={{ width: 54, flexShrink: 0, color: '#888' }}>{String(month).padStart(2, '0')}-{String(d.day).padStart(2, '0')}</span>
+            <span style={{ flex: 1, textAlign: 'right', color: d.income > 0 ? '#4caf50' : '#ccc' }}>{d.income > 0 ? d.income.toFixed(2) : '—'}</span>
+            <span style={{ flex: 1, textAlign: 'right', color: d.expense > 0 ? '#f44336' : '#ccc' }}>{d.expense > 0 ? d.expense.toFixed(2) : '—'}</span>
+            <span style={{ flex: 1, textAlign: 'right', color: d.balance >= 0 ? '#333' : '#f44336' }}>{d.balance.toFixed(2)}</span>
+            <span style={{ width: 36, flexShrink: 0, textAlign: 'right', fontSize: 10, color: '#7c3aed' }}>{d.transfer_count > 0 ? `${d.transfer_count}笔转账` : ''}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+})
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function StatsPage() {
+  const navigate = useNavigate()
   const now = dayjs()
   const [topTab, setTopTab] = useState<TopTab>('monthly')
   const [period, setPeriod] = useState({ year: now.year(), month: now.month() + 1 })
   const { year, month } = period
   const [annualYear, setAnnualYear] = useState(now.year())
   const [annualType, setAnnualType] = useState<'expense' | 'income'>('expense')
+  const [annualLegend, setAnnualLegend] = useState<Set<string>>(new Set(['expense']))
   const [viewType, setViewType] = useState<'expense' | 'income'>('expense')
   const [subTab, setSubTab] = useState<SubTab>('category')
+  const [memberId, setMemberId] = useState<number | null | undefined>(undefined)  // undefined=all, null=-1=unassigned, number=specific
 
+  const [members, setMembers] = useState<FamilyMember[]>([])
   const [summary, setSummary] = useState<MonthlySummaryStats | null>(null)
   const [categories, setCategories] = useState<CategoryBreakdownItem[]>([])
-  const [members, setMembers] = useState<MemberBreakdownItem[]>([])
   const [tags, setTags] = useState<TagBreakdownGroup[]>([])
   const [merchants, setMerchants] = useState<MerchantItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [dailyData, setDailyData] = useState<DailyReport | null>(null)
   const [annualData, setAnnualData] = useState<AnnualReport | null>(null)
   const [annualLoading, setAnnualLoading] = useState(false)
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -293,6 +330,33 @@ export default function StatsPage() {
   const [allocationLoading, setAllocationLoading] = useState(false)
   const [networthTrend, setNetworthTrend] = useState<NetWorthPoint[]>([])
   const [snapshotTaking, setSnapshotTaking] = useState(false)
+
+  // Drill-down state
+  const [drillTitle, setDrillTitle] = useState('')
+  const [drillTxns, setDrillTxns] = useState<DrillDownTransaction[]>([])
+  const [drillLoading, setDrillLoading] = useState(false)
+  const [selectedTxn, setSelectedTxn] = useState<DrillDownTransaction | null>(null)
+
+  const handleDrillDown = useCallback((params: {category_id?: number; tag_id?: number; counterparty?: string; title: string; day?: number; drillYear?: number; drillMonth?: number | null; allTypes?: boolean; drillType?: string}) => {
+    setDrillTitle(params.title)
+    setDrillLoading(true)
+    const m = params.drillMonth ?? month
+    const y = params.drillYear ?? year
+    const t = params.allTypes ? null : (params.drillType ?? viewType)
+    statsApi.drillDown(y, m, t, {
+      category_id: params.category_id,
+      tag_id: params.tag_id,
+      counterparty: params.counterparty,
+      ...(memberId != null ? { member_id: memberId } : {}),
+      day: params.day,
+    }).then(r => setDrillTxns(r.data)).finally(() => setDrillLoading(false))
+  }, [year, month, viewType, memberId])
+
+  const handleDeleteTxn = async (id: number) => {
+    await transactionApi.delete(id)
+    setSelectedTxn(null)
+    setDrillTxns(prev => prev.filter(t => t.id !== id))
+  }
 
   const isCurrentMonth = year === now.year() && month === now.month() + 1
 
@@ -304,34 +368,44 @@ export default function StatsPage() {
     setPeriod(p => p.month === 12 ? { year: p.year + 1, month: 1 } : { year: p.year, month: p.month + 1 })
   }
 
+  // Fetch members
+  useEffect(() => {
+    memberApi.list().then(r => setMembers(r.data)).catch(() => {})
+  }, [])
+
+  // Fetch monthly summary
   useEffect(() => {
     if (topTab !== 'monthly') return
-    statsApi.monthlySummary(year, month).then(r => setSummary(r.data)).catch(() => {})
-  }, [year, month, topTab])
+    statsApi.monthlySummary(year, month, memberId).then(r => setSummary(r.data)).catch(() => {})
+  }, [year, month, topTab, memberId])
 
+  // Fetch monthly breakdowns
   useEffect(() => {
     if (topTab !== 'monthly') return
     setLoading(true)
     const load =
-      subTab === 'category' ? statsApi.categoryBreakdown(year, month, viewType).then(r => setCategories(r.data)) :
-      subTab === 'member'   ? statsApi.memberBreakdown(year, month, viewType).then(r => setMembers(r.data)) :
-      subTab === 'tag'      ? statsApi.tagBreakdown(year, month, viewType).then(r => setTags(r.data)) :
-      statsApi.topMerchants(year, month, viewType).then(r => setMerchants(r.data))
+      subTab === 'category' ? statsApi.categoryBreakdown(year, month, viewType, memberId).then(r => setCategories(r.data)) :
+      subTab === 'daily'    ? statsApi.dailyReport(year, month, viewType, memberId).then(r => setDailyData(r.data)) :
+      subTab === 'tag'      ? statsApi.tagBreakdown(year, month, viewType, memberId).then(r => setTags(r.data)) :
+      statsApi.topMerchants(year, month, viewType, 10, memberId).then(r => setMerchants(r.data))
     load.finally(() => setLoading(false))
-  }, [year, month, viewType, subTab, topTab])
+  }, [year, month, viewType, subTab, topTab, memberId])
 
+  // Fetch annual
   useEffect(() => {
     if (topTab !== 'annual') return
     setAnnualLoading(true)
-    statsApi.annual(annualYear, annualType).then(r => setAnnualData(r.data)).finally(() => setAnnualLoading(false))
-  }, [annualYear, annualType, topTab])
+    statsApi.annual(annualYear, annualType, memberId).then(r => setAnnualData(r.data)).finally(() => setAnnualLoading(false))
+  }, [annualYear, annualType, topTab, memberId])
 
+  // Fetch asset accounts
   useEffect(() => {
     if (topTab !== 'asset') return
     setAssetLoading(true)
     accountApi.list().then(r => setAccounts(r.data)).finally(() => setAssetLoading(false))
   }, [topTab])
 
+  // Fetch allocation
   useEffect(() => {
     if (topTab !== 'allocation') return
     setAllocationLoading(true)
@@ -349,7 +423,7 @@ export default function StatsPage() {
   ]
   const SUB_TABS: { key: SubTab; label: string }[] = [
     { key: 'category', label: '分类' },
-    { key: 'member', label: '成员' },
+    { key: 'daily', label: '日报' },
     { key: 'tag', label: '标签' },
     { key: 'merchant', label: 'TOP 商户' },
   ]
@@ -371,6 +445,43 @@ export default function StatsPage() {
             {label}
           </button>
         ))}
+      </div>
+
+      {/* Global member filter chip bar */}
+      <div style={{
+        display: 'flex', gap: 6, padding: '8px 16px', overflowX: 'auto', whiteSpace: 'nowrap',
+        background: '#fff', borderBottom: '1px solid #f5f5f5',
+      }}>
+        <div
+          onClick={() => setMemberId(undefined)}
+          style={{
+            padding: '4px 12px', borderRadius: 16, fontSize: 12, cursor: 'pointer', flexShrink: 0,
+            fontWeight: memberId === undefined ? 600 : 400,
+            background: memberId === undefined ? '#4caf50' : '#f5f5f5',
+            color: memberId === undefined ? '#fff' : '#666',
+          }}
+        >全部</div>
+        {members.map(m => (
+          <div
+            key={m.id}
+            onClick={() => setMemberId(memberId === m.id ? undefined : m.id)}
+            style={{
+              padding: '4px 12px', borderRadius: 16, fontSize: 12, cursor: 'pointer', flexShrink: 0,
+              fontWeight: memberId === m.id ? 600 : 400,
+              background: memberId === m.id ? '#2196F3' : '#f5f5f5',
+              color: memberId === m.id ? '#fff' : '#666',
+            }}
+          >{m.avatar} {m.name}</div>
+        ))}
+        <div
+          onClick={() => setMemberId(memberId === -1 ? undefined : -1)}
+          style={{
+            padding: '4px 12px', borderRadius: 16, fontSize: 12, cursor: 'pointer', flexShrink: 0,
+            fontWeight: memberId === -1 ? 600 : 400,
+            background: memberId === -1 ? '#666' : '#f5f5f5',
+            color: memberId === -1 ? '#fff' : '#888',
+          }}
+        >未指定</div>
       </div>
 
       {/* Monthly tab */}
@@ -422,10 +533,10 @@ export default function StatsPage() {
             <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
           ) : (
             <>
-              {subTab === 'category' && <CategoryView data={categories} viewType={viewType} />}
-              {subTab === 'member'   && <MemberView data={members} viewType={viewType} />}
-              {subTab === 'tag'      && <TagView data={tags} />}
-              {subTab === 'merchant' && <MerchantView data={merchants} />}
+              {subTab === 'category' && <CategoryView data={categories} viewType={viewType} onDrillDown={handleDrillDown} />}
+              {subTab === 'daily' && <DailyView data={dailyData} loading={loading} viewType={viewType} month={month} onDrillDay={(day) => handleDrillDown({ title: `${month}月${day}日`, day, allTypes: true })} />}
+              {subTab === 'tag'      && <TagView data={tags} onDrillDown={handleDrillDown} />}
+              {subTab === 'merchant' && <MerchantView data={merchants} onDrillDown={handleDrillDown} />}
             </>
           )}
         </div>
@@ -445,23 +556,7 @@ export default function StatsPage() {
             <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
           ) : annualData && (
             <>
-              {/* 12-month bar chart */}
-              <div className="card" style={{ padding: '12px 0' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#555', padding: '0 14px 8px' }}>全年收支趋势</div>
-                <ResponsiveContainer width="100%" height={180}>
-                  <BarChart data={annualData.trend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }} barSize={8} barGap={2}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tickFormatter={m => `${m}月`} tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : `${v}`} />
-                    <Tooltip formatter={(v: unknown, name: unknown) => [`¥${(v as number).toFixed(0)}`, name === 'income' ? '收入' : name === 'expense' ? '支出' : '结余']} />
-                    <Legend formatter={k => k === 'income' ? '收入' : k === 'expense' ? '支出' : '结余'} wrapperStyle={{ fontSize: 11 }} />
-                    <Bar dataKey="income" fill="#4caf50" radius={[2, 2, 0, 0]} />
-                    <Bar dataKey="expense" fill="#f44336" radius={[2, 2, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Year total summary */}
+              {/* Annual summary cards */}
               {(() => {
                 const totalInc = annualData.trend.reduce((s, m) => s + m.income, 0)
                 const totalExp = annualData.trend.reduce((s, m) => s + m.expense, 0)
@@ -483,7 +578,54 @@ export default function StatsPage() {
                 )
               })()}
 
-              {/* Type toggle for category/member breakdown */}
+              {/* Legend toggle */}
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                {[
+                  { key: 'expense', label: '支出', color: '#f44336' },
+                  { key: 'income', label: '收入', color: '#4caf50' },
+                  { key: 'balance', label: '结余', color: '#2196F3' },
+                ].map(({ key, label, color }) => (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      const next = new Set(annualLegend)
+                      if (next.has(key)) next.delete(key); else next.add(key)
+                      if (next.size === 0) next.add(key)
+                      setAnnualLegend(next)
+                    }}
+                    style={{
+                      padding: '4px 12px', borderRadius: 14, border: `1.5px solid ${color}`,
+                      background: annualLegend.has(key) ? color : 'transparent',
+                      color: annualLegend.has(key) ? '#fff' : color,
+                      fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                    }}
+                  >{label}</button>
+                ))}
+                <button
+                  onClick={() => setAnnualLegend(new Set(['income', 'expense', 'balance']))}
+                  style={{
+                    padding: '4px 12px', borderRadius: 14, border: '1.5px solid #ccc',
+                    background: '#fafafa', color: '#666', fontSize: 12, cursor: 'pointer',
+                  }}
+                >全部</button>
+              </div>
+
+              {/* 12-month trend chart — cleaner design */}
+              <div className="card" style={{ padding: '14px 8px 4px 0' }}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={annualData.trend} margin={{ top: 4, right: 12, left: 0, bottom: 0 }} barSize={14} barGap={4}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" vertical={false} />
+                    <XAxis dataKey="month" tickFormatter={m => `${m}月`} tick={{ fontSize: 11, fill: '#999' }} axisLine={{ stroke: '#eee' }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: '#aaa' }} axisLine={false} tickLine={false} tickFormatter={v => v >= 10000 ? `${(v/10000).toFixed(1)}万` : v >= 1000 ? `${(v/1000).toFixed(0)}k` : `${v}`} width={40} />
+                    <Tooltip formatter={(v: unknown, name: unknown) => [`¥${(v as number).toFixed(0)}`, name === 'income' ? '收入' : name === 'expense' ? '支出' : '结余']} />
+                    {annualLegend.has('income')   && <Bar dataKey="income"  fill="#4caf50" radius={[4, 4, 0, 0]} />}
+                    {annualLegend.has('expense')  && <Bar dataKey="expense" fill="#f44336" radius={[4, 4, 0, 0]} />}
+                    {annualLegend.has('balance')  && <Bar dataKey="balance" fill="#2196F3" radius={[4, 4, 0, 0]} />}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Type toggle for category breakdown */}
               <div className="type-toggle">
                 <button className={annualType === 'expense' ? 'active' : ''} onClick={() => setAnnualType('expense')}>支出</button>
                 <button className={annualType === 'income' ? 'active' : ''} onClick={() => setAnnualType('income')}>收入</button>
@@ -494,11 +636,26 @@ export default function StatsPage() {
                 <EmptyState text={`${annualYear} 年没有${annualType === 'expense' ? '支出' : '收入'}数据`} />
               ) : (
                 <>
+                  {/* Donut chart */}
+                  <div className="card" style={{ padding: '12px 0' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#555', padding: '0 14px 8px' }}>分类占比</div>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <PieChart>
+                        <Pie data={annualData.categories} cx="50%" cy="50%" innerRadius={50} outerRadius={90} paddingAngle={2} dataKey="total" nameKey="name"
+                          label={renderPieLabel} labelLine={{ stroke: '#ccc', strokeWidth: 1 }}>
+                          {annualData.categories.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(0)}`, '']} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: -4 }}>分类汇总</div>
                   <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                     {annualData.categories.map((cat, i) => (
                       <div key={cat.id}>
-                        <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 8, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 8, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none', cursor: 'pointer' }}
+                          onClick={() => handleDrillDown({ category_id: cat.id, title: `${annualYear}年 ${cat.name}`, drillYear: annualYear, drillMonth: null as any, drillType: annualType })}>
                           <span style={{ fontSize: 18, flexShrink: 0 }}>{cat.icon}</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -514,7 +671,8 @@ export default function StatsPage() {
                           </div>
                         </div>
                         {cat.children.map(child => (
-                          <div key={child.id} style={{ display: 'flex', alignItems: 'center', padding: '7px 14px 7px 42px', gap: 8, background: '#fafafa', borderTop: '1px solid #f0f0f0' }}>
+                          <div key={child.id} style={{ display: 'flex', alignItems: 'center', padding: '7px 14px 7px 42px', gap: 8, background: '#fafafa', borderTop: '1px solid #f0f0f0', cursor: 'pointer' }}
+                            onClick={(e) => { e.stopPropagation(); handleDrillDown({ category_id: child.id, title: `${annualYear}年 ${child.name}`, drillYear: annualYear, drillMonth: null as any, drillType: annualType }) }}>
                             <span style={{ fontSize: 15, flexShrink: 0 }}>{child.icon}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -534,31 +692,27 @@ export default function StatsPage() {
                     ))}
                   </div>
 
-                  {/* Member breakdown */}
-                  {annualData.members.length > 0 && (
-                    <>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: -4 }}>成员汇总</div>
-                      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                        {annualData.members.map((m, i) => (
-                          <div key={m.member_id ?? 'null'} style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
-                            <span style={{ fontSize: 20, flexShrink: 0 }}>{m.member_avatar}</span>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                                <span style={{ fontSize: 14, color: '#333' }}>{m.member_name}</span>
-                                <span style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>¥{m.total.toFixed(0)}</span>
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <div style={{ flex: 1, height: 3, background: '#f0f0f0', borderRadius: 2 }}>
-                                  <div style={{ width: `${m.percentage}%`, height: '100%', background: '#2196F3', borderRadius: 2 }} />
-                                </div>
-                                <span style={{ fontSize: 10, color: '#aaa', minWidth: 32, textAlign: 'right' }}>{m.percentage.toFixed(1)}%</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
+                  {/* Monthly table */}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: -4 }}>月报表</div>
+                  <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', padding: '8px 14px', background: '#fafafa', fontSize: 11, color: '#999', fontWeight: 600 }}>
+                      <span style={{ width: 32, flexShrink: 0 }}>月</span>
+                      <span style={{ flex: 1, textAlign: 'right' }}>收入</span>
+                      <span style={{ flex: 1, textAlign: 'right' }}>支出</span>
+                      <span style={{ flex: 1, textAlign: 'right' }}>结余</span>
+                    </div>
+                    {annualData.trend.map((m, i) => (
+                      <div key={m.month} style={{
+                        display: 'flex', padding: '7px 14px', fontSize: 13, color: '#333',
+                        borderTop: i > 0 ? '1px solid #f5f5f5' : 'none',
+                      }}>
+                        <span style={{ width: 32, flexShrink: 0, color: '#888' }}>{m.month}月</span>
+                        <span style={{ flex: 1, textAlign: 'right', color: m.income > 0 ? '#4caf50' : '#ccc' }}>{m.income > 0 ? m.income.toFixed(0) : '—'}</span>
+                        <span style={{ flex: 1, textAlign: 'right', color: m.expense > 0 ? '#f44336' : '#ccc' }}>{m.expense > 0 ? m.expense.toFixed(0) : '—'}</span>
+                        <span style={{ flex: 1, textAlign: 'right', color: m.balance >= 0 ? '#333' : '#f44336' }}>{m.balance.toFixed(0)}</span>
                       </div>
-                    </>
-                  )}
+                    ))}
+                  </div>
                 </>
               )}
             </>
@@ -572,10 +726,19 @@ export default function StatsPage() {
           {assetLoading ? (
             <div style={{ textAlign: 'center', padding: 32, color: '#bbb', fontSize: 14 }}>加载中…</div>
           ) : (() => {
+            // Filter accounts by selected member
+            let filtered = accounts
+            if (memberId != null) {
+              if (memberId === -1) {
+                filtered = accounts.filter(a => a.member_id == null)
+              } else {
+                filtered = accounts.filter(a => a.member_id === memberId)
+              }
+            }
             const ASSET_CATS = ['资金账户', '充值账户', '投资理财']
             const LIAB_CATS  = ['信用卡', '债务']
-            const assets  = accounts.filter(a => ASSET_CATS.includes(a.category))
-            const liabs   = accounts.filter(a => LIAB_CATS.includes(a.category))
+            const assets  = filtered.filter(a => ASSET_CATS.includes(a.category))
+            const liabs   = filtered.filter(a => LIAB_CATS.includes(a.category))
             const totalAsset = assets.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
             const totalLiab  = liabs.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
             const netWorth   = totalAsset - totalLiab
@@ -623,11 +786,11 @@ export default function StatsPage() {
                     <div style={{ fontSize: 13, fontWeight: 600, color: '#555', padding: '0 14px 8px' }}>资产构成</div>
                     <ResponsiveContainer width="100%" height={160}>
                       <PieChart>
-                        <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value" nameKey="name">
+                        <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value" nameKey="name"
+                          label={renderPieLabel} labelLine={{ stroke: '#ccc', strokeWidth: 1 }}>
                           {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                         </Pie>
                         <Tooltip formatter={(v: unknown) => [`¥${(v as number).toFixed(2)}`, '']} />
-                        <Legend wrapperStyle={{ fontSize: 11 }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -728,6 +891,7 @@ export default function StatsPage() {
                           outerRadius={80}
                           innerRadius={44}
                           paddingAngle={2}
+                          label={renderPieLabel} labelLine={{ stroke: '#ccc', strokeWidth: 1 }}
                         >
                           {allocationData.items.map((_, i) => (
                             <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -769,6 +933,98 @@ export default function StatsPage() {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* ── Drill-down overlay (transaction list) ────────────────────────── */}
+      {drillTxns.length > 0 && !selectedTxn && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-end' }}
+          onClick={() => { setDrillTxns([]); setDrillTitle('') }}>
+          <div style={{ width: '100%', maxHeight: '75vh', background: '#fff', borderRadius: '16px 16px 0 0', padding: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>{drillTitle}</span>
+              <button onClick={() => { setDrillTxns([]); setDrillTitle('') }}
+                style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#999' }}>✕</button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {drillLoading ? (
+                <div style={{ textAlign: 'center', padding: 32, color: '#bbb' }}>加载中…</div>
+              ) : (
+                drillTxns.map((t, i) => (
+                  <div key={t.id} style={{
+                    display: 'flex', alignItems: 'center', padding: '10px 0', gap: 8,
+                    borderTop: i > 0 ? '1px solid #f5f5f5' : 'none', cursor: 'pointer',
+                  }} onClick={() => setSelectedTxn(t)}>
+                    <span style={{ fontSize: 16, flexShrink: 0 }}>{t.category_icon || '📦'}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 13, color: '#333' }}>{t.description || t.category_name || t.counterparty || '未分类'}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: t.type === 'expense' ? '#f44336' : t.type === 'income' ? '#4caf50' : '#7c3aed' }}>
+                          {t.type === 'expense' ? '-' : t.type === 'income' ? '+' : ''}¥{t.amount.toFixed(2)}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+                        {t.date} {t.member_name ? `· ${t.member_avatar} ${t.member_name}` : ''} {t.account_name ? `· ${t.account_name}` : ''}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, color: '#bbb' }}>›</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Transaction detail bottom sheet ──────────────────────────────── */}
+      {selectedTxn && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 250, display: 'flex', alignItems: 'flex-end' }}
+          onClick={() => setSelectedTxn(null)}>
+          <div style={{ width: '100%', background: 'white', borderRadius: '20px 20px 0 0', padding: 20 }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>
+                {selectedTxn.category_icon || '💰'} {selectedTxn.description || selectedTxn.category_name || selectedTxn.counterparty || '交易详情'}
+              </span>
+              <span style={{ fontSize: 20, fontWeight: 700, color: selectedTxn.type === 'expense' ? '#f44336' : selectedTxn.type === 'income' ? '#4caf50' : '#7c3aed' }}>
+                {selectedTxn.type === 'expense' ? '-' : selectedTxn.type === 'income' ? '+' : ''}¥{selectedTxn.amount.toFixed(2)}
+              </span>
+            </div>
+            <div style={{ fontSize: 14, color: '#6b7280', lineHeight: 2 }}>
+              <div>日期：{selectedTxn.date}</div>
+              {selectedTxn.type === 'transfer' ? (
+                <>
+                  <div>类型：转账</div>
+                  <div>转出：{selectedTxn.account_name ? `${selectedTxn.account_icon} ${selectedTxn.account_name}` : '未设置'}</div>
+                  <div>转入：{selectedTxn.to_account_name ? `${selectedTxn.to_account_icon} ${selectedTxn.to_account_name}` : '未设置'}</div>
+                </>
+              ) : (
+                <>
+                  <div>类型：{selectedTxn.type === 'expense' ? '支出' : '收入'}</div>
+                  {selectedTxn.category_name && <div>分类：{selectedTxn.category_icon} {selectedTxn.category_name}</div>}
+                  {selectedTxn.account_name && <div>账户：{selectedTxn.account_icon} {selectedTxn.account_name}</div>}
+                </>
+              )}
+              <div>成员：{selectedTxn.member_name ? `${selectedTxn.member_avatar} ${selectedTxn.member_name}` : '未指定'}</div>
+              {selectedTxn.counterparty && <div>对方：{selectedTxn.counterparty}</div>}
+              <div>来源：{selectedTxn.source === 'manual' ? '手动记账' : selectedTxn.source}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button onClick={() => setSelectedTxn(null)}
+                style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
+                关闭
+              </button>
+              <button onClick={() => { const id = selectedTxn.id; setSelectedTxn(null); navigate(`/add?id=${id}`) }}
+                style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+                编辑
+              </button>
+              <button onClick={() => handleDeleteTxn(selectedTxn.id)}
+                style={{ flex: 1, padding: 12, borderRadius: 10, border: 'none', background: '#ef4444', color: 'white', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+                删除
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
