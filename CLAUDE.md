@@ -53,7 +53,8 @@ backend/
     models.py              # SQLAlchemy ORM: TagCategory, Tag, transaction_tags/account_tags/holding_tags,
                            #   FamilyMember(保留备用), Category, Transaction, Account, Holding,
                            #   ReimbursementRecord, reimbursement_items, PaymentMethodMapping,
-                           #   RecurringRule, RecurringExecution
+                           #   RecurringRule, RecurringExecution,
+                           #   AccountSnapshot(每月1日快照), HoldingSnapshot(持仓快照+risk_class字段)
     schemas.py             # Pydantic v2 request/response models（含 TagCategoryOut/TagOut/TagBrief/
                            #   RecurringRuleCreate/Update/Out/RecurringExecutionOut）
                            #   ⚠️ 字段名与类型名同名冲突：用 `from datetime import date as Date` alias 规避
@@ -85,6 +86,21 @@ backend/
                            #   save 投资买入：fetch_fund_nav_on 查账单日净值 → 更新 shares/cost_price（加权平均）
                            #   save 当场建仓：target_holding_id 为空但 new_holding_code 非空时先建 Holding
       reimbursements.py    # /api/reimbursements/ CRUD：pending list / create / delete(revoke)
+      stats.py             # /api/stats/ 统一统计路由（核心模块）
+                           #   GET /monthly-summary — 月度摘要（收入/支出/结余 + 环比/同比）
+                           #   GET /category-breakdown — 分类汇总（支持 member_id，含子分类）
+                           #   GET /member-breakdown — 成员排行（保留给首页等场景）
+                           #   GET /tag-breakdown — 标签分组汇总
+                           #   GET /top-merchants — TOP 商户
+                           #   GET /annual — 年度报表（月度趋势 + 分类汇总 + 成员汇总）
+                           #   GET /daily-report — 日报（每日收支 + 转账笔数，不含无交易天）
+                           #   GET /drill-down — 下钻账单（支持 category_id/tag_id/counterparty/member_id/day，
+                           #     month 可选=年度下钻，type 可选=不限类型）
+                           #   GET /allocation — 资产配置（按 risk_class 汇总）
+                           #   POST /snapshots/take — 手动触发快照
+                           #   GET /networth-trend — 净资产趋势（基于快照表）
+                           #   ⚠️ 所有端点均支持 member_id 过滤（None=全部，-1=未指定，>0=指定成员）
+                           #   ⚠️ 有效金额：expense 类型自动扣除已报销部分
       recurring.py         # /api/recurring-rules/ CRUD + executions 查询
                            #   POST/PATCH 创建/修改规则后立即检查今天是否匹配，匹配则当场生成首笔交易
     parsers/
@@ -121,7 +137,14 @@ frontend/src/
                            #   详情页底部三个按钮：关闭 / 编辑（跳 /add?id=） / 删除
     AddPage.tsx            # 记账 + 编辑（同一页面，?id= 参数进入编辑模式，加载交易→预填→PATCH）
                            #   备注→description，无独立 note 字段，标签多选
-    StatsPage.tsx          # Category breakdown + monthly trend table
+    StatsPage.tsx          # 统计驾驶舱 — 四 tab：月度 / 年度 / 资产 / 配置
+                           #   月度：环形图 + 分类(下钻子分类)/日报(MM-DD 每日明细)/标签/TOP商户 四 sub-tab
+                           #   年度：环形图 + 柱状图(图例 toggle) + 分类汇总(下钻) + 月报表
+                           #   资产：净资产卡片 + 资产构成饼图 + 资产/负债账户列表
+                           #   配置：净资产趋势 + 资产配置现状饼图 + 手动快照按钮
+                           #   全局成员筛选 chip 栏：全部/各成员/未指定，月度/年度/资产全部联动
+                           #   全视图下钻：分类→子分类→账单列表→详情弹窗(编辑/删除)
+                           #   子组件 memo 优化，防止下钻时图表重渲染
     InvestPage.tsx         # Investment holdings, price refresh, add/edit modal（持仓支持标签）
                            #   每张持仓卡增加「赎回」按钮（shares=0 时点击弹提示，不 disabled）
                            #   RedeemModal：输入到账日期/账户/金额/份额，实时显示成本基础和盈亏，
@@ -265,6 +288,12 @@ frontend/src/
 - ~~**导入账户映射记忆**~~ — 新增 `payment_method_mappings` 表（source+raw_name 唯一）；导入流程扩展为三步：上传→账户映射→预览；parse 返回历史映射并预填 account_id；mapping step 列出 distinct payment_method，已记忆项自动预选（全部已记忆时跳过此步）；save 时 upsert 映射；updateMapping() 批量同步同支付方式的所有非转账交易
 - ~~**投资转账模型 + 自动算份额 + 赎回**~~ — 投资理财账户 current_balance 公式修复（仅取持仓市值）；investment_detector 识别蚂蚁财富买入/赎回→type=transfer；parse 后处理本地名称匹配+Eastmoney反查；save 查账单日历史净值算份额（加权均价）；holdings 新增 redeem 端点；ImportPage 橙色 badge + 持仓选择器 + 保存前校验 + 保存后反馈；InvestPage 赎回按钮 + RedeemModal；seed 新增投资盈亏分类
 - ~~**周期记账规则**~~ — RecurringRule + RecurringExecution 模型；每周/每月循环 + 永不/日期/次数结束方式；每天 00:05 定时生成 Transaction（source="recurring"）；创建/修改时当天匹配立即执行；SettingsPage 导航卡片 → /recurring 独立页（RecurringPage.tsx）；修改规则只影响未来生成的账单
+- ~~**统计模块重构（Phase 1-4）~~** — 月度消费报表（R1-R3）+ 年度报表（R4）+ 资产负债表（R5）+ 快照机制（R6）+ 资产配置视图（R8）
+  - Phase 1：月度环形图 + 分类/标签/TOP商户 + 环比/同比
+  - Phase 2：年度柱状图（图例 toggle）+ 分类汇总 + 月报表
+  - Phase 3：净资产卡片 + 资产构成饼图 + 账户列表
+  - Phase 4：AccountSnapshot/HoldingSnapshot 表 + 每月1日00:30自动快照 + 净资产趋势 + 资产配置环形图
+  - **后续增强**：全局成员筛选 chip 栏 + 日报表 + 全视图下钻（分类→账单→详情→编辑/删除）+ 环形图标签线 + 年度环形图 + memo 性能优化
 
 ### 🔙 回滚
 
@@ -286,14 +315,9 @@ frontend/src/
 - **方案草案**：新增「理财产品」账户大类，专门承载这类资产；可能需要一个新的"产品"模型记录买入金额/期限/到期日/预期收益率，赎回时手动录入到账金额自动算盈亏
 - **未定**：要不要复用 Holding 模型（asset_type='wealth' 已存在），还是新建独立的 WealthProduct 表
 
-#### 需求14：月度盈亏报表（HoldingSnapshot）
-- **背景**：目前 Holding.current_value 是即时市值，没有历史快照，无法回看"上个月底我的基金值多少钱"或"这个月投资赚了多少"
-- **方案草案**：
-  - 新增 `HoldingSnapshot` 表：holding_id + snapshot_date + shares + price + value + cost_total
-  - 新增 `AccountSnapshot` 表（可选）：account_id + snapshot_date + balance
-  - APScheduler 在每月 1 号 0 点自动给所有 holding 写一条快照
-  - 新增报表页：选择月份 → 显示 (本月末市值 - 上月末市值 - 本月净流入) = 月度盈亏
-- **依赖**：需求13 完成后再做（理财产品的快照逻辑可能不一样）
+#### 需求14：月度盈亏报表（快照机制已上线）
+- ~~AccountSnapshot + HoldingSnapshot 表已创建~~ — 每月 1 号 00:30 自动写快照；设置页可手动触发
+- **待做**：月度盈亏 = 本月末市值 - 上月末市值 - 本月净流入，需等快照积累 2+ 个月
 
 ### 待定方案
 
@@ -308,12 +332,10 @@ frontend/src/
 
 ### 待做优化
 
-- **统计图表可视化**：StatsPage 用 recharts 画饼图（分类占比）+ 柱状图（月度趋势）。recharts 已安装。
-
 ### 实施建议顺序
 
 1. **B2 修 bug** — 单个基金刷新无反应
 2. **需求2 商户记忆** — 独立，提升分类准确率
-3. **需求13 理财产品账户大类** — 模型扩展，为需求14 做铺垫
-4. **需求14 月度盈亏报表** — 依赖快照表，需求13 完成后做
-5. **需求11 + 图表 + AI** — 锦上添花
+3. **需求13 理财产品账户大类** — 模型扩展
+4. **需求14 月度盈亏报表** — 快照表已建，等数据积累 2+ 月后可做
+5. **需求11 账单搜索 + AI** — 锦上添花
