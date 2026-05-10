@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { transactionApi, categoryApi, tagApi, accountApi, memberApi, type CategoryTree, type Tag, type Account, type FamilyMember } from '../api'
+import { BankIcon } from '../components/BankIcon'
 
 type TxnType = 'expense' | 'income' | 'transfer'
 
@@ -220,44 +221,70 @@ export default function AddPage() {
       </div>
 
       {/* 账户选择 */}
-      {accounts.length > 0 && (
+      {accounts.length > 0 && (() => {
+        const renderAccountChips = (selectedId: number | null, onSelect: (id: number | null) => void) => {
+          const unassigned = accounts.filter(a => a.member_id == null)
+          const memberGroups = new Map<number, Account[]>()
+          accounts.filter(a => a.member_id != null).forEach(a => {
+            const arr = memberGroups.get(a.member_id!) || []
+            arr.push(a)
+            memberGroups.set(a.member_id!, arr)
+          })
+          return (
+            <>
+              {unassigned.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>未指定</div>
+                  <div className="member-chips" style={{ marginBottom: 6 }}>
+                    {unassigned.map(a => (
+                      <div key={a.id} className={`chip ${selectedId === a.id ? 'selected' : ''}`}
+                        onClick={() => onSelect(selectedId === a.id ? null : a.id)}>
+                        <BankIcon icon={a.icon} size={16} /> {a.name}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {[...memberGroups.entries()].map(([mid, accs]) => {
+                const m = members.find(mb => mb.id === mid)
+                return (
+                  <div key={mid}>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4, marginTop: 2 }}>
+                      {m ? `${m.avatar} ${m.name}` : '未知'}
+                    </div>
+                    <div className="member-chips" style={{ marginBottom: 6 }}>
+                      {accs.map(a => (
+                        <div key={a.id} className={`chip ${selectedId === a.id ? 'selected' : ''}`}
+                          onClick={() => onSelect(selectedId === a.id ? null : a.id)}>
+                          <BankIcon icon={a.icon} size={16} /> {a.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </>
+          )
+        }
+
+        return (
         <div className="form-group">
           {type === 'transfer' ? (
             <>
               <label>转出账户</label>
-              <div className="member-chips">
-                {accounts.map(a => (
-                  <div key={a.id} className={`chip ${accountId === a.id ? 'selected' : ''}`}
-                    onClick={() => setAccountId(accountId === a.id ? null : a.id)}>
-                    {a.icon} {a.name}
-                  </div>
-                ))}
-              </div>
+              {renderAccountChips(accountId, (id) => setAccountId(id))}
               <label style={{ marginTop: 8, display: 'block' }}>转入账户</label>
-              <div className="member-chips">
-                {accounts.map(a => (
-                  <div key={a.id} className={`chip ${toAccountId === a.id ? 'selected' : ''}`}
-                    onClick={() => setToAccountId(toAccountId === a.id ? null : a.id)}>
-                    {a.icon} {a.name}
-                  </div>
-                ))}
-              </div>
+              {renderAccountChips(toAccountId, (id) => setToAccountId(id))}
             </>
           ) : (
             <>
               <label>{type === 'expense' ? '支出账户' : '收入账户'}</label>
-              <div className="member-chips">
-                {accounts.map(a => (
-                  <div key={a.id} className={`chip ${accountId === a.id ? 'selected' : ''}`}
-                    onClick={() => setAccountId(accountId === a.id ? null : a.id)}>
-                    {a.icon} {a.name}
-                  </div>
-                ))}
-              </div>
+              {renderAccountChips(accountId, (id) => setAccountId(id))}
             </>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* 家庭成员 */}
       {members.length > 0 && (

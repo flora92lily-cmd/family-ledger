@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { getIconText } from '../components/BankIcon'
 import {
   importApi,
   categoryApi,
@@ -629,7 +630,7 @@ export default function ImportPage() {
                     color: mapped ? '#6d28d9' : '#9ca3af',
                   }}>
                   <option value="">未关联（这部分交易不会自动选账户）</option>
-                  {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                  {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                 </select>
               </div>
             )
@@ -868,7 +869,7 @@ export default function ImportPage() {
                       onChange={e => updateTxn(t.index, { account_id: e.target.value ? parseInt(e.target.value) : null })}
                       style={{ width: '100%', marginTop: 4, padding: '4px 6px', fontSize: 12, border: t.account_id ? '1px solid #a78bfa' : '1px dashed #d1d5db', borderRadius: 6, background: t.account_id ? '#f5f3ff' : '#f9fafb', color: t.account_id ? '#6d28d9' : '#9ca3af' }}>
                       <option value="">账户未关联（点击选择）</option>
-                      {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                      {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                     </select>
                   )}
 
@@ -946,7 +947,7 @@ export default function ImportPage() {
                               }}
                               style={{ flex: 1, padding: '2px 4px', fontSize: 11, border: '1px solid #d1fae5', borderRadius: 4, background: 'white' }}>
                               <option value="">绑定到投资账户</option>
-                              {investAccounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                              {investAccounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                             </select>
                             <button
                               onClick={() => {
@@ -1017,7 +1018,7 @@ export default function ImportPage() {
                         onChange={e => updateTxn(t.index, { account_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{ flex: 1, padding: '4px 6px', fontSize: 12, border: t.account_id ? '1px solid #6366f1' : '1px dashed #d1d5db', borderRadius: 6, background: t.account_id ? '#eef2ff' : '#f9fafb', color: t.account_id ? '#4338ca' : '#9ca3af' }}>
                         <option value="">{t.detected_action === 'buy' ? '资金账户' : '转出账户'}</option>
-                        {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                        {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                       </select>
                       <span style={{ color: '#6366f1', fontSize: 14 }}>→</span>
                       <select
@@ -1025,7 +1026,7 @@ export default function ImportPage() {
                         onChange={e => updateTxn(t.index, { to_account_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{ flex: 1, padding: '4px 6px', fontSize: 12, border: t.to_account_id ? '1px solid #6366f1' : '1px dashed #d1d5db', borderRadius: 6, background: t.to_account_id ? '#eef2ff' : '#f9fafb', color: t.to_account_id ? '#4338ca' : '#9ca3af' }}>
                         <option value="">{t.detected_action === 'sell' ? '资金账户' : '转入账户'}</option>
-                        {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                        {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                       </select>
                     </div>
                   )}
@@ -1173,7 +1174,7 @@ export default function ImportPage() {
                         onChange={e => updateReim(r.index, { to_account_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{ width: '100%', padding: '4px 6px', fontSize: 12, border: r.to_account_id ? '1px solid #10b981' : '1px dashed #d1d5db', borderRadius: 6, background: r.to_account_id ? '#ecfdf5' : '#f9fafb', color: r.to_account_id ? '#047857' : '#9ca3af' }}>
                         <option value="">到账账户未关联（点击选择）</option>
-                        {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+                        {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
                       </select>
                     )}
                   </div>

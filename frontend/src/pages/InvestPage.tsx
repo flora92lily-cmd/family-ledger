@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { holdingApi, tagApi, accountApi, memberApi, categoryApi, type Holding, type HoldingSummary, type AssetType, type Tag, type Account, type FamilyMember, type Category } from '../api'
+import { getIconText } from '../components/BankIcon'
 
 // 持仓类型 + 盈亏方向 → 默认分类名
 function defaultPnlCategoryName(asset_type: AssetType, pnl: number): string {
@@ -362,7 +363,7 @@ export default function InvestPage() {
                 style={{ ...inputStyle, padding: '9px 12px' }}>
                 <option value="">请选择</option>
                 {cashAccounts.map(a => (
-                  <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+                  <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>
                 ))}
               </select>
 
@@ -442,7 +443,9 @@ export default function InvestPage() {
 
             <label style={labelStyle}>资产类型</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-              {(Object.entries(ASSET_LABELS) as [AssetType, { label: string; icon: string }][]).map(([k, v]) => (
+              {(Object.entries(ASSET_LABELS) as [AssetType, { label: string; icon: string }][])
+                .filter(([k]) => editId !== null || k !== 'wealth')
+                .map(([k, v]) => (
                 <button key={k} onClick={() => setForm(f => ({ ...f, asset_type: k }))}
                   style={{
                     flex: 1, padding: 8, borderRadius: 8, fontSize: 13, cursor: 'pointer',
@@ -512,7 +515,7 @@ export default function InvestPage() {
                   style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 15, marginBottom: 14 }}>
                   <option value="">不绑定账户</option>
                   {accounts.filter(a => a.category === '投资理财').map(a => (
-                    <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+                    <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>
                   ))}
                 </select>
               </>

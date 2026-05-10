@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, memo } from 'react'
 import dayjs from 'dayjs'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
+import { BankIcon } from '../components/BankIcon'
 import {
   statsApi,
   accountApi,
@@ -750,7 +751,7 @@ export default function StatsPage() {
 
             const AccountRow = ({ acc, i }: { acc: Account; i: number }) => (
               <div key={acc.id} style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{acc.icon}</span>
+                <span style={{ flexShrink: 0 }}><BankIcon icon={acc.icon} size={24} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 14, color: '#333' }}>{acc.name}</span>

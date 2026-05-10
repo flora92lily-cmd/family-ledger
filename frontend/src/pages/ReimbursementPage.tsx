@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
+import { BankIcon, getIconText } from '../components/BankIcon'
 import {
   reimbursementApi, accountApi,
   type Transaction, type ReimbursementRecord, type Account,
@@ -251,7 +252,7 @@ export default function ReimbursementPage() {
                     </div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
                       {dayjs(t.date).format('MM-DD')}
-                      {t.account && ` · ${t.account.icon}${t.account.name}`}
+                      {t.account && ` · ${getIconText(t.account.icon)}${t.account.name}`}
                       {t.tags.length > 0 && ` · ${t.tags.map(x => x.name).join('/')}`}
                     </div>
                   </div>
@@ -303,7 +304,7 @@ export default function ReimbursementPage() {
                   </div>
                   <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {dayjs(r.date).format('MM-DD')}
-                    {r.to_account && ` · ${r.to_account.icon}${r.to_account.name}`}
+                    {r.to_account && ` · ${getIconText(r.to_account.icon)}${r.to_account.name}`}
                     {r.source !== 'manual' && ` · ${r.source}`}
                   </div>
                 </div>
@@ -357,7 +358,7 @@ export default function ReimbursementPage() {
                 <div key={a.id}
                   className={`chip ${submitToAccount === a.id ? 'selected' : ''}`}
                   onClick={() => setSubmitToAccount(a.id)}>
-                  {a.icon} {a.name}
+                  <BankIcon icon={a.icon} size={16} /> {a.name}
                 </div>
               ))}
             </div>
@@ -402,9 +403,9 @@ export default function ReimbursementPage() {
 
             <div style={{ fontSize: 14, color: '#6b7280', lineHeight: 2 }}>
               <div>到账日期：{selectedRecord.date}</div>
-              <div>到账账户：
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>到账账户：
                 {selectedRecord.to_account
-                  ? `${selectedRecord.to_account.icon} ${selectedRecord.to_account.name}`
+                  ? <><BankIcon icon={selectedRecord.to_account.icon} size={16} /> {selectedRecord.to_account.name}</>
                   : '未设置'}
               </div>
               {selectedRecord.note && <div>备注：{selectedRecord.note}</div>}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { transactionApi, reimbursementApi, type Transaction, type MonthlySummary, type ReimbursementRecord } from '../api'
+import { BankIcon } from '../components/BankIcon'
 
 export default function HomePage() {
   const navigate = useNavigate()
@@ -81,13 +82,17 @@ export default function HomePage() {
   }
 
   // 右侧第二行：账户（转账显示 from→to）
-  const txnAccountStr = (txn: Transaction) => {
+  const txnAccountEl = (txn: Transaction) => {
     if (txn.type === 'transfer') {
-      const from = txn.account ? `${txn.account.icon}${txn.account.name}` : '?'
-      const to = txn.to_account ? `${txn.to_account.icon}${txn.to_account.name}` : '?'
-      return `${from}→${to}`
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          {txn.account ? <><BankIcon icon={txn.account.icon} size={14} />{txn.account.name}</> : '?'}
+          <span style={{ margin: '0 2px' }}>→</span>
+          {txn.to_account ? <><BankIcon icon={txn.to_account.icon} size={14} />{txn.to_account.name}</> : '?'}
+        </span>
+      )
     }
-    return txn.account ? `${txn.account.icon}${txn.account.name}` : ''
+    return txn.account ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}><BankIcon icon={txn.account.icon} size={14} />{txn.account.name}</span> : null
   }
 
   const txnAmountStr = (txn: Transaction) => {
@@ -143,7 +148,7 @@ export default function HomePage() {
               </div>
               {txns.map(txn => {
                 const subMeta = txnSubMeta(txn)
-                const accountStr = txnAccountStr(txn)
+                const accountEl = txnAccountEl(txn)
                 return (
                   <div key={txn.id} className="txn-item" onClick={() => setSelected(txn)}>
                     <div className="icon">{txnIcon(txn)}</div>
@@ -167,9 +172,9 @@ export default function HomePage() {
                       <div className="amount" style={{ color: txnAmountColor(txn) }}>
                         {txnAmountStr(txn)}
                       </div>
-                      {accountStr && (
-                        <div className="meta" style={{ marginTop: 2, fontSize: 11, color: '#9ca3af', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {accountStr}
+                      {accountEl && (
+                        <div className="meta" style={{ marginTop: 2, fontSize: 11, color: '#9ca3af', maxWidth: 160, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                          {accountEl}
                         </div>
                       )}
                     </div>
@@ -201,14 +206,14 @@ export default function HomePage() {
               {selected.type === 'transfer' ? (
                 <>
                   <div>类型：转账</div>
-                  <div>转出：{selected.account ? `${selected.account.icon} ${selected.account.name}` : '未设置'}</div>
-                  <div>转入：{selected.to_account ? `${selected.to_account.icon} ${selected.to_account.name}` : '未设置'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>转出：{selected.account ? <><BankIcon icon={selected.account.icon} size={16} /> {selected.account.name}</> : '未设置'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>转入：{selected.to_account ? <><BankIcon icon={selected.to_account.icon} size={16} /> {selected.to_account.name}</> : '未设置'}</div>
                 </>
               ) : (
                 <>
                   <div>类型：{selected.type === 'expense' ? '支出' : '收入'}</div>
                   {selected.category && <div>分类：{selected.category.icon} {selected.category.name}</div>}
-                  {selected.account && <div>账户：{selected.account.icon} {selected.account.name}</div>}
+                  {selected.account && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>账户：<BankIcon icon={selected.account.icon} size={16} /> {selected.account.name}</div>}
                 </>
               )}
               <div>成员：{selected.member ? `${selected.member.avatar} ${selected.member.name}` : '未指定'}</div>
@@ -234,7 +239,7 @@ export default function HomePage() {
                     {linkedRecord && (
                       <>
                         <div>报销日期：{linkedRecord.date}</div>
-                        <div>到账账户：{linkedRecord.to_account ? `${linkedRecord.to_account.icon} ${linkedRecord.to_account.name}` : '未设置'}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>到账账户：{linkedRecord.to_account ? <><BankIcon icon={linkedRecord.to_account.icon} size={16} /> {linkedRecord.to_account.name}</> : '未设置'}</div>
                         <div>实际到账金额：¥{linkedRecord.total_amount.toFixed(2)}</div>
                         {linkedRecord.note && <div>报销备注：{linkedRecord.note}</div>}
                       </>

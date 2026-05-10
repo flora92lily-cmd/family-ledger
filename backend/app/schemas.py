@@ -228,7 +228,7 @@ class ReimbursementRecordOut(BaseModel):
 class AccountCreate(BaseModel):
     name: str
     icon: str = "🏦"
-    category: str  # 资金账户 / 信用卡 / 充值账户 / 债务
+    category: str  # 资金账户 / 信用卡 / 充值账户 / 债务 / 投资理财 / 银行理财
     balance: float = 0
     member_id: Optional[int] = None
     note: str = ""

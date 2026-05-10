@@ -5,18 +5,20 @@ import {
   type Account, type AccountCategory,
   type Tag, type TagCategory, type FamilyMember,
 } from '../api'
+import { BankIcon, LOGO_ICONS } from '../components/BankIcon'
 
 const TAG_ICONS = ['🏷️', '👩', '👨', '👧', '👦', '👴', '👵', '✈️', '🏖️', '🎉', '💼', '🏠', '🎓', '🎮', '🌟', '❤️', '🔖', '📌', '🎯', '🗂️']
-const ACCOUNT_ICONS = ['🏦', '💳', '💰', '📱', '🏧', '🎫', '🚌', '🍽️', '🏠', '🚗', '📋', '💼', '🧧', '💵']
+const ACCOUNT_EMOJI_ICONS = ['🏦', '💳', '💰', '📱', '🏧', '🎫', '🚌', '🍽️', '💵', '💼', '🧧', '🏠', '🚗']
 const MEMBER_ICONS = ['👤', '👨', '👩', '👧', '👦', '👴', '👵', '🧒', '👶', '🏠', '👨‍👩‍👧', '👨‍👩‍👦', '👫', '👬', '👭', '🐶', '🐱']
 
-const ACCOUNT_CATEGORIES: AccountCategory[] = ['资金账户', '信用卡', '充值账户', '债务', '投资理财']
+const ACCOUNT_CATEGORIES: AccountCategory[] = ['资金账户', '信用卡', '充值账户', '债务', '投资理财', '银行理财']
 const ACCOUNT_CATEGORY_ICONS: Record<AccountCategory, string> = {
   '资金账户': '🏦',
   '信用卡': '💳',
   '充值账户': '🎫',
   '债务': '📋',
   '投资理财': '📈',
+  '银行理财': '🏛️',
 }
 
 const EMPTY_ACCOUNT_FORM = { name: '', icon: '🏦', category: '资金账户' as AccountCategory, balance: 0, member_id: null as number | null, note: '', sort_order: 0, tag_ids: [] as number[] }
@@ -356,42 +358,67 @@ export default function SettingsPage() {
         {ACCOUNT_CATEGORIES.map(cat => {
           const catAccounts = accounts.filter(a => a.category === cat)
           if (catAccounts.length === 0) return null
+
+          // 按家庭成员分组
+          const unassigned = catAccounts.filter(a => a.member_id == null)
+          const memberGroups = new Map<number, Account[]>()
+          catAccounts.filter(a => a.member_id != null).forEach(a => {
+            const arr = memberGroups.get(a.member_id!) || []
+            arr.push(a)
+            memberGroups.set(a.member_id!, arr)
+          })
+
+          const renderAccountRow = (a: Account) => (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', padding: '6px 0 6px 16px', borderBottom: '1px solid #f9fafb' }}>
+              <span style={{ marginRight: 8 }}><BankIcon icon={a.icon} size={24} /></span>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: 14 }}>{a.name}</span>
+                {a.tags.length > 0 && (
+                  <div style={{ marginTop: 2 }}>
+                    {a.tags.map(t => (
+                      <span key={t.id} style={{ fontSize: 11, background: '#f0f9ff', color: '#0369a1', borderRadius: 4, padding: '1px 5px', marginRight: 4 }}>
+                        {t.icon} {t.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <span style={{ fontSize: 13, color: (cat === '信用卡' || cat === '债务') ? '#ef4444' : (a.current_balance < 0 ? '#ef4444' : '#10b981'), marginRight: 10 }}>
+                {(cat === '信用卡' || cat === '债务')
+                  ? `-¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
+                  : `${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
+              </span>
+              <button onClick={() => openEditAccount(a)}
+                style={{ background: 'none', border: 'none', fontSize: 13, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
+              <button onClick={() => deleteAccount(a)}
+                style={{ background: 'none', border: 'none', fontSize: 13, color: '#ef4444', cursor: 'pointer' }}>删除</button>
+            </div>
+          )
+
           return (
             <div key={cat} style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span>{ACCOUNT_CATEGORY_ICONS[cat]}</span>{cat}
               </div>
-              {catAccounts.map(a => (
-                <div key={a.id} style={{ display: 'flex', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f9fafb' }}>
-                  <span style={{ fontSize: 20, marginRight: 8 }}>{a.icon}</span>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: 14 }}>{a.name}</span>
-                    {a.member && (
-                      <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 6 }}>
-                        {a.member.avatar} {a.member.name}
-                      </span>
-                    )}
-                    {a.tags.length > 0 && (
-                      <div style={{ marginTop: 2 }}>
-                        {a.tags.map(t => (
-                          <span key={t.id} style={{ fontSize: 11, background: '#f0f9ff', color: '#0369a1', borderRadius: 4, padding: '1px 5px', marginRight: 4 }}>
-                            {t.icon} {t.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+              {/* 未指定成员 */}
+              {unassigned.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, color: '#b0b7c3', marginBottom: 2, paddingLeft: 4 }}>未指定</div>
+                  {unassigned.map(renderAccountRow)}
+                </>
+              )}
+              {/* 按成员分组 */}
+              {[...memberGroups.entries()].map(([mid, accs]) => {
+                const m = members.find(mb => mb.id === mid)
+                return (
+                  <div key={mid}>
+                    <div style={{ fontSize: 11, color: '#b0b7c3', marginBottom: 2, paddingLeft: 4 }}>
+                      {m ? `${m.avatar} ${m.name}` : '未知成员'}
+                    </div>
+                    {accs.map(renderAccountRow)}
                   </div>
-                  <span style={{ fontSize: 13, color: (cat === '信用卡' || cat === '债务') ? '#ef4444' : (a.current_balance < 0 ? '#ef4444' : '#10b981'), marginRight: 10 }}>
-                    {(cat === '信用卡' || cat === '债务')
-                      ? `-¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
-                      : `${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
-                  </span>
-                  <button onClick={() => openEditAccount(a)}
-                    style={{ background: 'none', border: 'none', fontSize: 13, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
-                  <button onClick={() => deleteAccount(a)}
-                    style={{ background: 'none', border: 'none', fontSize: 13, color: '#ef4444', cursor: 'pointer' }}>删除</button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )
         })}
@@ -494,7 +521,15 @@ export default function SettingsPage() {
 
             <label style={labelStyle}>图标</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-              {ACCOUNT_ICONS.map(ico => (
+              {/* 银行/平台 Logo */}
+              {LOGO_ICONS.map(key => (
+                <button key={key} onClick={() => setAccountForm(f => ({ ...f, icon: key }))}
+                  style={{ width: 36, height: 36, cursor: 'pointer', borderRadius: 8, border: accountForm.icon === key ? '2px solid #3b82f6' : '1px solid #e5e7eb', background: accountForm.icon === key ? '#eff6ff' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                  <BankIcon icon={key} size={22} />
+                </button>
+              ))}
+              {/* 通用 emoji */}
+              {ACCOUNT_EMOJI_ICONS.map(ico => (
                 <button key={ico} onClick={() => setAccountForm(f => ({ ...f, icon: ico }))}
                   style={{ width: 36, height: 36, fontSize: 20, cursor: 'pointer', borderRadius: 8, border: accountForm.icon === ico ? '2px solid #3b82f6' : '1px solid #e5e7eb', background: accountForm.icon === ico ? '#eff6ff' : 'white' }}>{ico}</button>
               ))}

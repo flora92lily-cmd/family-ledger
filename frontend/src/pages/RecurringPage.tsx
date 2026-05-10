@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { getIconText } from '../components/BankIcon'
 import {
   recurringRuleApi, accountApi, memberApi, tagApi, categoryApi,
   type RecurringRule, type RecurrenceType, type EndType, type TxnType,
@@ -298,7 +299,7 @@ export default function RecurringPage() {
               style={{ width: '100%', padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 14, marginBottom: 14 }}>
               <option value="">请选择</option>
               {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+                <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>
               ))}
             </select>
 
@@ -311,7 +312,7 @@ export default function RecurringPage() {
                   style={{ width: '100%', padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 14, marginBottom: 14 }}>
                   <option value="">请选择</option>
                   {accounts.filter(a => a.id !== ruleForm.account_id).map(a => (
-                    <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+                    <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>
                   ))}
                 </select>
               </>

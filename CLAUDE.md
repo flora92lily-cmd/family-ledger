@@ -73,6 +73,7 @@ backend/
                            #   /summary/monthly, /summary/category（支持 tag_id 筛选）
       accounts.py          # /api/accounts/ CRUD, current_balance computed from linked transactions + holdings
                            #   ⚠️ 投资理财账户特殊处理：current_balance = sum(holdings.current_value)，
+                           #   银行理财账户：余额逻辑同资金账户（balance + delta），不走持仓模型
                            #   不加 balance + delta，防止 transfer 流水与持仓市值双计
       holdings.py          # /api/holdings/ CRUD + /refresh, /refresh-all, /summary
                            #   新增 POST /{id}/redeem：拆出 transfer(成本) + income/expense(盈亏) 两笔交易，
@@ -137,6 +138,7 @@ frontend/src/
                            #   详情页底部三个按钮：关闭 / 编辑（跳 /add?id=） / 删除
     AddPage.tsx            # 记账 + 编辑（同一页面，?id= 参数进入编辑模式，加载交易→预填→PATCH）
                            #   备注→description，无独立 note 字段，标签多选
+                           #   账户选择器按成员分组展示，避免大量账户堆积
     StatsPage.tsx          # 统计驾驶舱 — 四 tab：月度 / 年度 / 资产 / 配置
                            #   月度：环形图 + 分类(下钻子分类)/日报(MM-DD 每日明细)/标签/TOP商户 四 sub-tab
                            #   年度：环形图 + 柱状图(图例 toggle) + 分类汇总(下钻) + 月报表
@@ -149,8 +151,10 @@ frontend/src/
                            #   每张持仓卡增加「赎回」按钮（shares=0 时点击弹提示，不 disabled）
                            #   RedeemModal：输入到账日期/账户/金额/份额，实时显示成本基础和盈亏，
                            #   勾选"记盈亏"时选对应收入/支出分类（默认"基金收益"/"基金亏损"等）
-    SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（账户支持标签）+ 分类管理
+                           #   新建持仓时隐藏「理财」资产类型（编辑已有理财持仓时仍显示）
+    SettingsPage.tsx       # 标签管理（TagCategory/Tag CRUD）+ 账户管理（Logo 图标 + 成员分组 + 标签）+ 分类管理
                            #   + 导入账单入口 + 报销管理入口 + 分类管理入口 + 周期记账入口
+                           #   账户按大类→成员二级分组展示；图标支持 PNG Logo（招行/工行/建行/中信/银河/支付宝/微信/雪球）
     ImportPage.tsx         # 三步流程：select（上传）→ mapping（账户映射）→ preview（预览确认）→ save
                            #   mapping step：列出账单 distinct payment_method，每行选对应 APP 账户；
                            #     后端已记忆的项显示"已记忆"徽标，首次出现显示"新"；
@@ -216,6 +220,18 @@ frontend/src/
 - **DB migration**: `database.py:init_db()` 分三步：① `Base.metadata.create_all`（新表）→ ② `CREATE TABLE IF NOT EXISTS` 显式兜底（防止旧 DB 漏建新表，目前含 `reimbursement_records` / `reimbursement_items` / `payment_method_mappings`）→ ③ `ALTER TABLE ADD COLUMN` + try/except 增量加列。`_migrate_members_to_tags()` 将旧 FamilyMember 数据迁移到 TagCategory/Tag（幂等，tag_categories 表非空时跳过）。
 - **Price service**: Synchronous HTTP calls wrapped in `asyncio.run_in_executor`. Fund: eastmoney f10/lsjz；Stock: Tencent qt.gtimg.cn（600xxx→sh, 000xxx/300xxx→sz）。
 - **Async relationship loading**: READ 时用 `selectinload()`；WRITE 时直接操作关联表（见上方标签系统说明）。
+
+#### 账户图标系统（BankIcon）
+
+- **Account.icon 字段**：`String(10)`，支持两类值：
+  - **Logo key**：`cmb`/`icbc`/`ccb`/`citic`/`galaxy`/`alipay`/`wechat`/`xueqiu` → 渲染对应 PNG 图片（`/logos/{key}.png`）
+  - **Emoji**：直接作为文本渲染（向后兼容已有账户）
+- **BankIcon 组件** (`frontend/src/components/BankIcon.tsx`)：
+  - `<BankIcon icon={a.icon} size={24} />` — JSX 渲染（SVG 已替换为真实 PNG）
+  - `getIconText(icon)` — 返回纯文本表示（logo → 中文缩写，emoji → 自身），用于 `<option>` 等不能放 `<img>` 的场景
+  - `LOGO_ICONS` — 导出 logo key 数组供图标选择器使用
+- **Logo 图片**：存放在 `frontend/public/logos/`，Vite 构建时直接复制到 `dist/`
+- **图标选择器**（SettingsPage 弹窗）：Logo 区（8 个 PNG 预览按钮）+ Emoji 区（13 个通用图标）
 
 #### 周期记账系统
 - **RecurringRule**：循环交易规则，字段含 `recurrence_type`（weekly/monthly）、`recurrence_day`（1-7 或 1-31）、`start_date`、`end_type`（never/date/count）、`end_date`、`max_count`、`executed_count`、`is_active`，以及交易模板字段（type/category_id/account_id/to_account_id/amount/member_id/description/tag_ids_json）
@@ -295,6 +311,8 @@ frontend/src/
   - Phase 4：AccountSnapshot/HoldingSnapshot 表 + 每月1日00:30自动快照 + 净资产趋势 + 资产配置环形图
   - **后续增强**：全局成员筛选 chip 栏 + 日报表 + 全视图下钻（分类→账单→详情→编辑/删除）+ 环形图标签线 + 年度环形图 + memo 性能优化
 
+- ~~**账户管理增强**~~ — (1) 新增「银行理财」账户大类，余额逻辑同资金账户（balance + delta）；(2) 账户图标系统：支持真实 PNG Logo（招行/工行/建行/中信银行/银河证券/支付宝/微信/雪球），创建 `BankIcon` 组件 + `getIconText` 辅助函数；(3) 账户列表按大类→成员二级分组展示；(4) AddPage 记账页账户选择器按成员分组；(5) InvestPage 新建持仓时隐藏「理财」资产类型
+
 ### 🔙 回滚
 
 - ~~**需求6b：家庭总资产净值卡**~~ — InvestPage 里的绿色净值卡先拿掉，等整体 UI 设计时再决定放哪里（底层方案A 计算逻辑保留）
@@ -310,10 +328,9 @@ frontend/src/
 - **新增上层**：`MerchantCategory` 表（counterparty → category_id），记录用户导入时手动修改的分类
 - **优先级**：商户记忆 > 关键词匹配 > 默认"其他"
 
-#### 需求13：理财产品账户大类
-- **背景**：当前 Account.category 五大类（资金账户/信用卡/充值账户/债务/投资理财），银行理财（如招行朝朝宝、基金固收+、银行结构性存款）目前只能选"投资理财"，但和基金/股票走 Holding 模型不一样——理财产品通常按"持有金额"展示，不按份额×净值
-- **方案草案**：新增「理财产品」账户大类，专门承载这类资产；可能需要一个新的"产品"模型记录买入金额/期限/到期日/预期收益率，赎回时手动录入到账金额自动算盈亏
-- **未定**：要不要复用 Holding 模型（asset_type='wealth' 已存在），还是新建独立的 WealthProduct 表
+#### ~~需求13：理财产品账户大类~~（已完成）
+- ~~**已实现**~~：新增「银行理财」账户大类（AccountCategory），余额逻辑同资金账户（balance + 流水 delta），不依赖持仓模型
+- Holding 模型的 `asset_type='wealth'` 保留但前端已隐藏（新建时不显示，编辑已有理财持仓时仍可见）
 
 #### 需求14：月度盈亏报表（快照机制已上线）
 - ~~AccountSnapshot + HoldingSnapshot 表已创建~~ — 每月 1 号 00:30 自动写快照；设置页可手动触发
@@ -336,6 +353,5 @@ frontend/src/
 
 1. **B2 修 bug** — 单个基金刷新无反应
 2. **需求2 商户记忆** — 独立，提升分类准确率
-3. **需求13 理财产品账户大类** — 模型扩展
-4. **需求14 月度盈亏报表** — 快照表已建，等数据积累 2+ 月后可做
-5. **需求11 账单搜索 + AI** — 锦上添花
+3. **需求14 月度盈亏报表** — 快照表已建，等数据积累 2+ 月后可做
+4. **需求11 账单搜索 + AI** — 锦上添花

@@ -183,7 +183,7 @@ export interface HoldingSummary {
 }
 
 // === Account ===
-export type AccountCategory = '资金账户' | '信用卡' | '充值账户' | '债务' | '投资理财'
+export type AccountCategory = '资金账户' | '信用卡' | '充值账户' | '债务' | '投资理财' | '银行理财'
 
 export interface Account {
   id: number
