@@ -106,6 +106,9 @@ class AlipayParser(BaseParser):
             # 余额宝转入按收入处理（用户明确认可）
             if "余额宝" in description:
                 txn_type = "income"
+                # 余额宝-自动转入：用户不希望导入，默认不勾选
+                if "自动转入" in description:
+                    default_unchecked = True
             else:
                 # 其他不计收支：作为支出兜底，但默认不勾选，让用户决定
                 txn_type = "expense"

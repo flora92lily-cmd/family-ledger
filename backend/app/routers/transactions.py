@@ -28,6 +28,7 @@ async def list_transactions(
     category_id: int = None,
     type: str = None,
     member_id: int = None,  # 0 = 仅未指定（NULL），>0 = 指定成员
+    account_id: int = None,  # 同时匹配 account_id 与 to_account_id（覆盖转账双向）
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -62,6 +63,11 @@ async def list_transactions(
             query = query.where(Transaction.member_id.is_(None))
         else:
             query = query.where(Transaction.member_id == member_id)
+    if account_id:
+        query = query.where(
+            (Transaction.account_id == account_id) |
+            (Transaction.to_account_id == account_id)
+        )
     result = await db.execute(query)
     return result.scalars().all()
 

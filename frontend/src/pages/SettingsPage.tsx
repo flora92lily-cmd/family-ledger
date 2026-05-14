@@ -369,7 +369,9 @@ export default function SettingsPage() {
           })
 
           const renderAccountRow = (a: Account) => (
-            <div key={a.id} style={{ display: 'flex', alignItems: 'center', padding: '6px 0 6px 16px', borderBottom: '1px solid #f9fafb' }}>
+            <div key={a.id}
+              onClick={() => navigate(`/account/${a.id}`)}
+              style={{ display: 'flex', alignItems: 'center', padding: '6px 0 6px 16px', borderBottom: '1px solid #f9fafb', cursor: 'pointer' }}>
               <span style={{ marginRight: 8 }}><BankIcon icon={a.icon} size={24} /></span>
               <div style={{ flex: 1 }}>
                 <span style={{ fontSize: 14 }}>{a.name}</span>
@@ -388,9 +390,9 @@ export default function SettingsPage() {
                   ? `-¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
                   : `${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
               </span>
-              <button onClick={() => openEditAccount(a)}
+              <button onClick={(e) => { e.stopPropagation(); openEditAccount(a) }}
                 style={{ background: 'none', border: 'none', fontSize: 13, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
-              <button onClick={() => deleteAccount(a)}
+              <button onClick={(e) => { e.stopPropagation(); deleteAccount(a) }}
                 style={{ background: 'none', border: 'none', fontSize: 13, color: '#ef4444', cursor: 'pointer' }}>删除</button>
             </div>
           )
