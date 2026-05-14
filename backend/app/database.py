@@ -96,6 +96,12 @@ async def init_db():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(holding_id, snapshot_date)
             )""",
+            """CREATE TABLE IF NOT EXISTS merchant_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                merchant VARCHAR(200) NOT NULL UNIQUE,
+                category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))

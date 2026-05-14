@@ -3,12 +3,14 @@
 匹配优先级：
 1. 来源账单自带的分类名（source_category_name → source_parent_category_name）
    按名直接查 Category 表（type 必须匹配），命中即用。钱迹导入走这条路径。
+1.5. 商户记忆（merchant_categories 表，counterparty 精确匹配）
+   用户历史导入/编辑形成的 counterparty→category 映射，精确匹配优先于关键词。
 2. 关键词匹配 Category.keywords（在 description + counterparty 中找）
 3. 兜底：其他支出 / 其他收入
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.models import Category
+from app.models import Category, MerchantCategory
 from app.parsers.base import ParsedTransaction
 
 
@@ -16,7 +18,7 @@ async def categorize_transactions(
     transactions: list[ParsedTransaction],
     db: AsyncSession,
 ) -> list[ParsedTransaction]:
-    """根据来源分类名 + Category.keywords 给每条交易自动分配 category_id"""
+    """根据来源分类名 + 商户记忆 + Category.keywords 给每条交易自动分配 category_id"""
     result = await db.execute(select(Category))
     categories = result.scalars().all()
 
@@ -25,6 +27,15 @@ async def categorize_transactions(
     for cat in categories:
         if cat.type in name_lookup:
             name_lookup[cat.type][cat.name] = cat
+
+    # 商户记忆：counterparty → Category（整表加载，避免 N+1）
+    cat_by_id = {cat.id: cat for cat in categories}
+    mc_result = await db.execute(select(MerchantCategory))
+    merchant_map: dict[str, Category] = {}
+    for mc in mc_result.scalars().all():
+        cat = cat_by_id.get(mc.category_id)
+        if cat:
+            merchant_map[mc.merchant] = cat
 
     # 2. 关键词匹配候选（只收录有关键词的分类，提速）
     by_type: dict[str, list[tuple[Category, list[str]]]] = {"expense": [], "income": []}
@@ -56,6 +67,12 @@ async def categorize_transactions(
             matched = type_index.get(txn.source_category_name)
         if not matched and txn.source_parent_category_name:
             matched = type_index.get(txn.source_parent_category_name)
+
+        # 1.5. 商户记忆（counterparty 精确匹配，类型必须一致）
+        if not matched and txn.counterparty and txn.type in ("expense", "income"):
+            cat = merchant_map.get(txn.counterparty)
+            if cat and cat.type == txn.type:
+                matched = cat
 
         # 2. 关键词匹配
         if not matched:

@@ -118,7 +118,7 @@ backend/
                            #   分类名走 source_category_name/source_parent_category_name 由 categorizer 直接按名匹配
                            #   类型=报销 → expense+is_reimbursable；类型=报销记录 → ParsedReimbursement
       generic_csv.py       # Fallback CSV parser
-      categorizer.py       # 优先级：source_category_name 直接按名匹配 → Category.keywords 关键词 → 兜底其他支出/收入
+      categorizer.py       # 优先级：source_category_name → 商户记忆(merchant_categories 精确匹配) → Category.keywords 关键词 → 兜底其他支出/收入
       investment_detector.py  # 识别投资买入/赎回：detect_investment() 各 source 各自规则；
                            #   apply_detection() 原地修改 ParsedTransaction（type→transfer，写 detected_* 字段）
                            #   支付宝规则：counterparty/description 含"蚂蚁财富" + regex 提取基金名+动作
@@ -319,14 +319,17 @@ frontend/src/
 
 ### 🐛 待修 Bug
 
-- **B2：投资模块单个基金刷新行情无反应** — 点击单个持仓的"刷新行情"按钮无反馈，待排查前端 handleRefreshOne 或后端 /holdings/{id}/refresh endpoint
+（无待修 Bug）
+
+- ~~**B2：投资模块单个基金刷新行情无反应**~~ — 已确认修复（handleRefreshOne + POST /{id}/refresh 均已实现）
 
 ### 待实施
 
-#### 需求2：智能分类优化（商户记忆层）
-- **底层保留**：`Category.keywords` 作为初始兜底
-- **新增上层**：`MerchantCategory` 表（counterparty → category_id），记录用户导入时手动修改的分类
-- **优先级**：商户记忆 > 关键词匹配 > 默认"其他"
+#### ~~需求2：智能分类优化（商户记忆层）~~（已完成）
+- **MerchantCategory 表**：`merchant_categories`，counterparty UNIQUE，关联 categories.id ON DELETE CASCADE
+- **分类优先级**：source_category_name → 商户记忆（counterparty 精确匹配）→ 关键词匹配 → 兜底
+- **触发时机**：导入 save 时批量 upsert；AddPage PATCH 修改分类时也 upsert（用户手动纠错立即生效）
+- **实现文件**：models.py / database.py / parsers/categorizer.py / routers/imports.py / routers/transactions.py
 
 #### ~~需求13：理财产品账户大类~~（已完成）
 - ~~**已实现**~~：新增「银行理财」账户大类（AccountCategory），余额逻辑同资金账户（balance + 流水 delta），不依赖持仓模型

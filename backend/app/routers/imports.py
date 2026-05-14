@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models import (
     Transaction, Tag, TagCategory, transaction_tags,
     ReimbursementRecord, reimbursement_items, Account, Holding,
-    PaymentMethodMapping,
+    PaymentMethodMapping, MerchantCategory,
 )
 from app.parsers import get_parser, ParsedReimbursement
 from app.parsers.categorizer import categorize_transactions
@@ -497,6 +497,19 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
             holdings_warnings.append("股票买入暂不自动算份额，请到持仓页手动调整")
 
         saved += 1
+
+    # upsert 商户记忆（counterparty → category_id），供下次导入自动分类使用
+    merchant_memory: dict[str, int] = {}
+    for t in req.transactions:
+        if t.counterparty and t.category_id and t.type in ("expense", "income"):
+            merchant_memory[t.counterparty] = t.category_id
+    for merchant, cat_id in merchant_memory.items():
+        await db.execute(
+            sa_delete(MerchantCategory).where(MerchantCategory.merchant == merchant)
+        )
+        await db.execute(
+            sa_insert(MerchantCategory).values(merchant=merchant, category_id=cat_id)
+        )
 
     reim_saved = 0
     reim_linked = 0

@@ -4,7 +4,7 @@ from sqlalchemy import select, func, extract, insert as sa_insert, delete as sa_
 from sqlalchemy.orm import selectinload
 from datetime import date
 from app.database import get_db
-from app.models import Transaction, Category, Account, Tag, FamilyMember, transaction_tags
+from app.models import Transaction, Category, Account, Tag, FamilyMember, transaction_tags, MerchantCategory
 from app.schemas import (
     TransactionCreate, TransactionUpdate, TransactionOut,
     MonthlySummary, CategorySummary, MemberSummary,
@@ -150,6 +150,18 @@ async def update_transaction(txn_id: int, data: TransactionUpdate, db: AsyncSess
 
     if tag_ids is not None:
         await _set_tags(txn_id, tag_ids, db)
+
+    # 商户记忆：用户手动改了分类，更新记忆供下次导入使用
+    if "category_id" in patch and txn.counterparty and txn.type in ("expense", "income"):
+        await db.execute(
+            sa_delete(MerchantCategory).where(MerchantCategory.merchant == txn.counterparty)
+        )
+        await db.execute(
+            sa_insert(MerchantCategory).values(
+                merchant=txn.counterparty,
+                category_id=txn.category_id,
+            )
+        )
 
     await db.commit()
     result = await db.execute(

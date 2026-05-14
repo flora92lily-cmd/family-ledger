@@ -211,6 +211,20 @@ class PaymentMethodMapping(Base):
     account = relationship("Account", foreign_keys=[account_id])
 
 
+# ─── 商户分类记忆 ──────────────────────────────────────────────────────────────
+
+class MerchantCategory(Base):
+    """记忆：某个 counterparty（商户/对方） → category_id 映射，提升再次导入的自动分类准确率"""
+    __tablename__ = "merchant_categories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant = Column(String(200), nullable=False, unique=True)   # counterparty 原值
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    last_used_at = Column(DateTime, server_default=func.now())
+
+    category = relationship("Category", foreign_keys=[category_id])
+
+
 # ─── 循环记账规则 ───────────────────────────────────────────────────────────────
 
 class RecurringRule(Base):
