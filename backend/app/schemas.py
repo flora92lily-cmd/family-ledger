@@ -352,3 +352,29 @@ class RecurringExecutionOut(BaseModel):
     executed_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ─── 对手方转账关键词 ─────────────────────────────────────────────────────────
+
+class TransferKeywordCreate(BaseModel):
+    keyword: str
+    to_account_id: Optional[int] = None
+    note: str = ""
+
+
+class TransferKeywordUpdate(BaseModel):
+    keyword: Optional[str] = None
+    to_account_id: Optional[int] = None
+    note: Optional[str] = None
+
+
+class TransferKeywordOut(BaseModel):
+    id: int
+    keyword: str
+    to_account_id: Optional[int] = None
+    to_account: Optional[AccountBrief] = None
+    note: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}

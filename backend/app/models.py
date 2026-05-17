@@ -225,6 +225,23 @@ class MerchantCategory(Base):
     category = relationship("Category", foreign_keys=[category_id])
 
 
+# ─── 对手方转账关键词 ─────────────────────────────────────────────────────────────
+
+class TransferKeyword(Base):
+    """记忆：账单 counterparty 含此关键词时，自动识别为 transfer（家庭内部转账场景）。
+    全 source 生效，substring 匹配。"""
+    __tablename__ = "transfer_keywords"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    keyword = Column(String(100), nullable=False, unique=True)  # 对手方关键词，substring 匹配
+    to_account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    note = Column(String(200), default="")                       # 备注，如"老婆的招行卡"
+    created_at = Column(DateTime, server_default=func.now())
+    last_used_at = Column(DateTime, nullable=True)               # parse 命中时由 save 端点更新
+
+    to_account = relationship("Account", foreign_keys=[to_account_id])
+
+
 # ─── 循环记账规则 ───────────────────────────────────────────────────────────────
 
 class RecurringRule(Base):

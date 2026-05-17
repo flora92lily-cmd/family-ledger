@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models import (
     Transaction, Tag, TagCategory, transaction_tags,
     ReimbursementRecord, reimbursement_items, Account, Holding,
-    PaymentMethodMapping, MerchantCategory,
+    PaymentMethodMapping, MerchantCategory, TransferKeyword,
 )
 from app.parsers import get_parser, ParsedReimbursement
 from app.parsers.categorizer import categorize_transactions
@@ -225,6 +225,25 @@ async def parse_bill(
     # 智能分类（仅对 Transaction）
     transactions = await categorize_transactions(transactions, db)
 
+    # 对手方关键词识别：counterparty 含某关键词 → 强制 type=transfer，预填 to_account_id
+    # 跳过已经是 transfer（信用卡还款 / 投资 detector）的；按关键词长度从长到短匹配（更精确优先）
+    kw_to_account_by_index: dict[int, Optional[int]] = {}
+    kw_rows = (await db.execute(
+        select(TransferKeyword).order_by(TransferKeyword.keyword.desc())
+    )).scalars().all()
+    if kw_rows:
+        kw_sorted = sorted(kw_rows, key=lambda k: -len(k.keyword or ""))
+        for idx, t in enumerate(transactions):
+            if t.type == "transfer":
+                continue  # 已经是 transfer 的不覆盖（保留信用卡还款 / 投资 detector 的判定）
+            if not t.counterparty:
+                continue
+            for kw in kw_sorted:
+                if kw.keyword and kw.keyword in t.counterparty:
+                    t.type = "transfer"
+                    kw_to_account_by_index[idx] = kw.to_account_id
+                    break
+
     # 投资交易后处理：本地 holdings 名称匹配 → 反查 eastmoney 候选
     invest_txns = [t for t in transactions if t.detected_action]
     fund_search_results: dict[str, list[dict]] = {}
@@ -301,15 +320,19 @@ async def parse_bill(
 
     # 历史账户映射查询：聚合需要按 payment_method 决定 from 账户的交易的 distinct payment_method
     # （非 transfer 交易 + 投资买入/赎回 transfer——后者 from 端是资金账户，按 payment_method 映射
-    #   + 显式双账户 transfer——如钱迹"账户1/账户2"，两端都按 payment_method 映射）
+    #   + 显式双账户 transfer——如钱迹"账户1/账户2"，两端都按 payment_method 映射
+    #   + 对手方关键词命中的 transfer——from 端仍是 payment_method 账户）
     distinct_pm_set: set[str] = set()
-    for t in transactions:
+    for idx, t in enumerate(transactions):
         if t.type != "transfer" or t.detected_action:
             distinct_pm_set.add(t.payment_method or "")
         elif t.to_payment_method:
             # 显式双账户 transfer：两端都加入映射
             distinct_pm_set.add(t.payment_method or "")
             distinct_pm_set.add(t.to_payment_method or "")
+        elif idx in kw_to_account_by_index:
+            # 对手方关键词命中的 transfer：from 端按 payment_method 映射
+            distinct_pm_set.add(t.payment_method or "")
     distinct_pm = sorted(distinct_pm_set)
     pm_to_account: dict[str, Optional[int]] = {}
     if distinct_pm:
@@ -326,7 +349,7 @@ async def parse_bill(
                 acc_id = None
             pm_to_account[raw_name] = acc_id
 
-    # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer + 显式双账户 transfer 都填）
+    # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer + 显式双账户 transfer + 关键词命中 transfer 都填）
     parsed_out = []
     for i, t in enumerate(transactions):
         tag_names: list[str] = t.tags or []
@@ -338,6 +361,10 @@ async def parse_bill(
             # 显式双账户 transfer：两端都从映射取
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
             prefilled_to_account_id = pm_to_account.get(t.to_payment_method or "")
+        elif i in kw_to_account_by_index:
+            # 对手方关键词命中：from 端按 payment_method 映射；to 端取关键词配置（可能为 None）
+            prefilled_account_id = pm_to_account.get(t.payment_method or "")
+            prefilled_to_account_id = kw_to_account_by_index.get(i)
         parsed_out.append(ParsedTxnOut(
             index=i,
             amount=t.amount,
@@ -576,6 +603,30 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
                     .values(reimbursement_status="done")
                 )
                 reim_linked += 1
+
+    # 更新 TransferKeyword.last_used_at：对每条 transfer 交易，找命中的关键词并标记
+    transfer_counterparties = [
+        (t.counterparty or "") for t in req.transactions if t.type == "transfer" and t.counterparty
+    ]
+    if transfer_counterparties:
+        kw_rows = (await db.execute(select(TransferKeyword))).scalars().all()
+        if kw_rows:
+            kw_sorted = sorted(kw_rows, key=lambda k: -len(k.keyword or ""))
+            now_ts = datetime.now()
+            touched_ids: set[int] = set()
+            for cp in transfer_counterparties:
+                for kw in kw_sorted:
+                    if kw.id in touched_ids:
+                        continue
+                    if kw.keyword and kw.keyword in cp:
+                        touched_ids.add(kw.id)
+                        break
+            if touched_ids:
+                await db.execute(
+                    sa_update(TransferKeyword)
+                    .where(TransferKeyword.id.in_(touched_ids))
+                    .values(last_used_at=now_ts)
+                )
 
     # upsert 账户映射：account_id 为 None 的条目跳过（用户没决定，不存）
     mappings_saved = 0

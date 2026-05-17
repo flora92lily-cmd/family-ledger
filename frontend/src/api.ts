@@ -684,4 +684,31 @@ export const recurringRuleApi = {
     api.get<RecurringExecution[]>(`/api/recurring-rules/${id}/executions`),
 }
 
+// ─── 对手方转账关键词 ─────────────────────────────────────────────────────────
+
+export interface TransferKeyword {
+  id: number
+  keyword: string
+  to_account_id: number | null
+  to_account?: AccountBrief | null
+  note: string
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface TransferKeywordInput {
+  keyword: string
+  to_account_id?: number | null
+  note?: string
+}
+
+export const transferKeywordApi = {
+  list: () => api.get<TransferKeyword[]>('/api/transfer-keywords/'),
+  create: (data: TransferKeywordInput) =>
+    api.post<TransferKeyword>('/api/transfer-keywords/', data),
+  update: (id: number, data: Partial<TransferKeywordInput>) =>
+    api.patch<TransferKeyword>(`/api/transfer-keywords/${id}`, data),
+  delete: (id: number) => api.delete(`/api/transfer-keywords/${id}`),
+}
+
 export default api

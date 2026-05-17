@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from starlette.types import Scope
 from app.database import init_db, async_session
 from app.routers import categories, transactions, imports, holdings, accounts
-from app.routers import tags, reimbursements, members, recurring, stats
+from app.routers import tags, reimbursements, members, recurring, stats, transfer_keywords
 from app.seed import seed_defaults
 from app.scheduler import create_scheduler, startup_backfill, startup_backfill_recurring
 
@@ -71,6 +71,7 @@ app.include_router(accounts.router)
 app.include_router(reimbursements.router)
 app.include_router(recurring.router)
 app.include_router(stats.router)
+app.include_router(transfer_keywords.router)
 
 
 @app.get("/api/health")

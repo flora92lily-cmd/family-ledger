@@ -8,6 +8,7 @@ import {
   accountApi,
   memberApi,
   holdingApi,
+  transferKeywordApi,
   type ParsedTransaction,
   type ParsedReimbursement,
   type CategoryTree,
@@ -17,6 +18,7 @@ import {
   type AccountMappingItem,
   type Holding,
   type FundCandidate,
+  type TransferKeyword,
 } from '../api'
 
 // 支付方式关键词 → 账户名关键词映射
@@ -104,6 +106,15 @@ export default function ImportPage() {
   // 后端返回时已经在 payment_method_mappings 表里记忆过的 raw_name 集合（用于在 mapping 页显示"已记忆"徽标）
   const [rememberedRawNames, setRememberedRawNames] = useState<Set<string>>(new Set())
 
+  // 对手方转账关键词：管理界面状态
+  const [transferKeywords, setTransferKeywords] = useState<TransferKeyword[]>([])
+  const [showKwManager, setShowKwManager] = useState(false)
+  const [kwEditingId, setKwEditingId] = useState<number | null>(null)   // 正在编辑的关键词 ID（null=新增模式或未编辑）
+  const [kwFormKeyword, setKwFormKeyword] = useState('')
+  const [kwFormToAccountId, setKwFormToAccountId] = useState<number | null>(null)
+  const [kwFormNote, setKwFormNote] = useState('')
+  const [kwSubmitting, setKwSubmitting] = useState(false)
+
   // 钱迹专属：标签列按家庭成员匹配（命中成员名 → 填 member_id，否则继续作为标签）
   const [qianjiTagAsMember, setQianjiTagAsMember] = useState(() => {
     try { return localStorage.getItem('qianji_tag_as_member') === '1' } catch { return false }
@@ -119,6 +130,7 @@ export default function ImportPage() {
     accountApi.list().then(r => setAccounts(r.data))
     memberApi.list().then(r => setMembers(r.data))
     holdingApi.list().then(r => setHoldings(r.data))
+    transferKeywordApi.list().then(r => setTransferKeywords(r.data)).catch(() => { /* ignore */ })
   }, [])
 
   useEffect(() => {
@@ -516,6 +528,219 @@ export default function ImportPage() {
     }
   }
 
+  // ─── 对手方转账关键词管理 ────────────────────────────────────────────────────
+
+  // 用最新的 transferKeywords 扫描 transactions，把命中的非 transfer 行升级为 transfer
+  // 已是 transfer 的行不动；不主动降级（删除关键词后旧匹配保持不变，用户可在预览页三档按钮手动改）
+  const applyTransferKeywordsToTxns = (kws: TransferKeyword[]) => {
+    if (kws.length === 0) return 0
+    const kwSorted = [...kws].sort((a, b) => (b.keyword?.length || 0) - (a.keyword?.length || 0))
+    let hits = 0
+    setTransactions(prev => prev.map(t => {
+      if (t.type === 'transfer') return t
+      if (!t.counterparty) return t
+      for (const kw of kwSorted) {
+        if (kw.keyword && t.counterparty.includes(kw.keyword)) {
+          hits += 1
+          return {
+            ...t,
+            type: 'transfer',
+            to_account_id: t.to_account_id ?? kw.to_account_id,
+          }
+        }
+      }
+      return t
+    }))
+    return hits
+  }
+
+  const loadTransferKeywords = async () => {
+    try {
+      const res = await transferKeywordApi.list()
+      setTransferKeywords(res.data)
+      return res.data
+    } catch (err) {
+      console.error('加载转账关键词失败', err)
+      return [] as TransferKeyword[]
+    }
+  }
+
+  const openKwManager = () => {
+    setShowKwManager(true)
+    setKwEditingId(null)
+    setKwFormKeyword('')
+    setKwFormToAccountId(null)
+    setKwFormNote('')
+    loadTransferKeywords()  // 打开时拉最新（其他设备 / 历史可能新增了）
+  }
+
+  const startEditKw = (kw: TransferKeyword) => {
+    setKwEditingId(kw.id)
+    setKwFormKeyword(kw.keyword)
+    setKwFormToAccountId(kw.to_account_id)
+    setKwFormNote(kw.note)
+  }
+
+  const cancelEditKw = () => {
+    setKwEditingId(null)
+    setKwFormKeyword('')
+    setKwFormToAccountId(null)
+    setKwFormNote('')
+  }
+
+  const submitKw = async () => {
+    const keyword = kwFormKeyword.trim()
+    if (!keyword) {
+      alert('请输入关键词')
+      return
+    }
+    setKwSubmitting(true)
+    try {
+      if (kwEditingId) {
+        await transferKeywordApi.update(kwEditingId, {
+          keyword,
+          to_account_id: kwFormToAccountId,
+          note: kwFormNote.trim(),
+        })
+      } else {
+        await transferKeywordApi.create({
+          keyword,
+          to_account_id: kwFormToAccountId,
+          note: kwFormNote.trim(),
+        })
+      }
+      cancelEditKw()
+      const fresh = await loadTransferKeywords()
+      // 关键词变更后立即应用到当前 transactions（mapping/preview 都可见）
+      applyTransferKeywordsToTxns(fresh)
+    } catch (err) {
+      const error = err as { response?: { data?: { detail?: string } }, message?: string }
+      alert('保存失败：' + (error.response?.data?.detail || error.message || '未知错误'))
+    } finally {
+      setKwSubmitting(false)
+    }
+  }
+
+  const deleteKw = async (id: number, keyword: string) => {
+    if (!confirm(`删除关键词「${keyword}」？删除后下次导入不再自动识别此对手方为转账。`)) return
+    try {
+      await transferKeywordApi.delete(id)
+      await loadTransferKeywords()
+    } catch (err) {
+      const error = err as { message?: string }
+      alert('删除失败：' + error.message)
+    }
+  }
+
+  // 修改单条账单的 type（三档切换）
+  const changeTxnType = (idx: number, newType: 'expense' | 'income' | 'transfer') => {
+    const patch: Partial<ParsedTransaction> = { type: newType }
+    if (newType !== 'transfer') {
+      patch.to_account_id = null
+    }
+    updateTxn(idx, patch)
+  }
+
+  // 转账关键词管理弹层（mapping + preview 两个 step 都用，独立 JSX 复用）
+  const kwManagerModal = showKwManager ? (
+    <div
+      onClick={() => setShowKwManager(false)}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: 'white', borderRadius: '16px 16px 0 0', width: '100%', maxWidth: 600, maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>🔁 转账关键词管理</div>
+          <button onClick={() => setShowKwManager(false)}
+            style={{ background: 'none', border: 'none', fontSize: 22, color: '#9ca3af', cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12, padding: '8px 10px', background: '#f9fafb', borderRadius: 6 }}>
+          账单导入时,如对手方包含此处任一关键词(substring 匹配),将自动识别为转账类型。
+          <strong>新增/修改后立即应用到本次预览</strong>;预览页每行的三档按钮可手动调整。
+        </div>
+
+        {/* 表单：新增或编辑 */}
+        <div style={{ marginBottom: 12, padding: 10, background: '#f5f3ff', border: '1px solid #c4b5fd', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: '#6d28d9', marginBottom: 6 }}>
+            {kwEditingId ? '编辑关键词' : '新增关键词'}
+          </div>
+          <input
+            type="text"
+            value={kwFormKeyword}
+            onChange={e => setKwFormKeyword(e.target.value)}
+            placeholder="对手方关键词(如「张三」「老婆招行」)"
+            style={{ width: '100%', padding: '6px 8px', fontSize: 13, border: '1px solid #ddd6fe', borderRadius: 6, marginBottom: 6, boxSizing: 'border-box' }} />
+          <select
+            value={kwFormToAccountId ?? ''}
+            onChange={e => setKwFormToAccountId(e.target.value ? parseInt(e.target.value) : null)}
+            style={{ width: '100%', padding: '6px 8px', fontSize: 13, border: '1px solid #ddd6fe', borderRadius: 6, marginBottom: 6, background: 'white', boxSizing: 'border-box' }}>
+            <option value="">转入账户(可选,留空则需在预览页手动选)</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{getIconText(a.icon)} {a.name}</option>)}
+          </select>
+          <input
+            type="text"
+            value={kwFormNote}
+            onChange={e => setKwFormNote(e.target.value)}
+            placeholder="备注(可选,如「对象的招行卡」)"
+            style={{ width: '100%', padding: '6px 8px', fontSize: 13, border: '1px solid #ddd6fe', borderRadius: 6, marginBottom: 8, boxSizing: 'border-box' }} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={submitKw}
+              disabled={kwSubmitting || !kwFormKeyword.trim()}
+              style={{ flex: 1, padding: '6px 0', fontSize: 13, fontWeight: 500, background: '#6d28d9', color: 'white', border: 'none', borderRadius: 6, cursor: kwSubmitting || !kwFormKeyword.trim() ? 'not-allowed' : 'pointer', opacity: kwSubmitting || !kwFormKeyword.trim() ? 0.5 : 1 }}>
+              {kwSubmitting ? '保存中...' : (kwEditingId ? '更新' : '新增')}
+            </button>
+            {kwEditingId && (
+              <button
+                onClick={cancelEditKw}
+                style={{ flex: 1, padding: '6px 0', fontSize: 13, background: 'white', color: '#6b7280', border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer' }}>
+                取消编辑
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 已有关键词列表 */}
+        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 6 }}>
+          已配置 {transferKeywords.length} 个关键词
+        </div>
+        {transferKeywords.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#9ca3af', padding: 16, textAlign: 'center', background: '#f9fafb', borderRadius: 6 }}>
+            暂无关键词,新增后立即应用到本次预览
+          </div>
+        ) : (
+          <div>
+            {transferKeywords.map(kw => (
+              <div key={kw.id}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', marginBottom: 6, background: kwEditingId === kw.id ? '#fef3c7' : '#f9fafb', borderRadius: 6, border: kwEditingId === kw.id ? '1px solid #fcd34d' : '1px solid #e5e7eb' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{kw.keyword}</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                    {kw.to_account
+                      ? <>→ {getIconText(kw.to_account.icon)} {kw.to_account.name}</>
+                      : <span style={{ color: '#9ca3af' }}>未绑定转入账户</span>}
+                    {kw.note && <span> · {kw.note}</span>}
+                  </div>
+                </div>
+                <button
+                  onClick={() => startEditKw(kw)}
+                  style={{ fontSize: 11, padding: '3px 8px', background: 'white', border: '1px solid #d1d5db', borderRadius: 4, color: '#374151', cursor: 'pointer' }}>
+                  编辑
+                </button>
+                <button
+                  onClick={() => deleteKw(kw.id, kw.keyword)}
+                  style={{ fontSize: 11, padding: '3px 8px', background: 'white', border: '1px solid #fca5a5', borderRadius: 4, color: '#b91c1c', cursor: 'pointer' }}>
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null
+
   const totalSelected = transactions.filter(t => selectedIdx.has(t.index))
   const totalExpense = totalSelected.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
   const totalIncome = totalSelected.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
@@ -614,6 +839,15 @@ export default function ImportPage() {
     const sortedPms = Array.from(pmCounts.entries()).sort((a, b) => b[1] - a[1])
     const unmappedCount = sortedPms.filter(([rn]) => !accountMappings.get(rn)).length
 
+    // 统计当前 transactions 里被关键词命中的 transfer 条数（counterparty 含某关键词）
+    const kwHitCount = transferKeywords.length === 0
+      ? 0
+      : transactions.filter(t =>
+          t.type === 'transfer' &&
+          t.counterparty &&
+          transferKeywords.some(kw => kw.keyword && t.counterparty.includes(kw.keyword))
+        ).length
+
     return (
       <div className="page-content">
         <div className="page-header">
@@ -622,7 +856,22 @@ export default function ImportPage() {
         </div>
         <div style={{ padding: '0 16px' }}>
           <div style={{ margin: '8px 0', padding: '10px 14px', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, fontSize: 13, color: '#5b21b6' }}>
-            📥 把账单里出现的支付方式映射到 APP 账户。下次导入相同来源的账单会自动按这次的映射预填，不用再选。
+            📥 把账单里出现的支付方式映射到 APP 账户。下次导入相同来源的账单会自动按这次的映射预填,不用再选。
+          </div>
+
+          {/* 对手方转账关键词管理入口（mapping step 内,改完进入预览即生效） */}
+          <div style={{ margin: '8px 0' }}>
+            <button
+              onClick={openKwManager}
+              style={{ width: '100%', padding: '10px 12px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 10, color: '#92400e', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              🔁 转账关键词管理
+              <span style={{ fontSize: 11, color: '#a16207', fontWeight: 400 }}>
+                · 已配置 {transferKeywords.length} 个,命中 {kwHitCount} 笔
+              </span>
+            </button>
+            <div style={{ fontSize: 11, color: '#9ca3af', textAlign: 'center', marginTop: 4 }}>
+              对手方含关键词的账单将自动识别为转账,新增/修改后立即应用到本次预览
+            </div>
           </div>
 
           {sortedPms.length === 0 ? (
@@ -688,6 +937,7 @@ export default function ImportPage() {
             </button>
           )}
         </div>
+        {kwManagerModal}
       </div>
     )
   }
@@ -867,6 +1117,37 @@ export default function ImportPage() {
                     {t.counterparty && t.counterparty !== t.description && ` · ${t.counterparty}`}
                     {t.payment_method && <span style={{ color: '#a78bfa' }}> · {t.payment_method}</span>}
                   </div>
+
+                  {/* 类型三档切换（投资交易由专属面板的"改回普通支出"处理，这里隐藏避免冲突） */}
+                  {!t.detected_action && (
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+                      {([
+                        { val: 'expense', label: '支出', color: '#ef4444', bg: '#fef2f2', border: '#fecaca' },
+                        { val: 'income', label: '收入', color: '#22c55e', bg: '#f0fdf4', border: '#bbf7d0' },
+                        { val: 'transfer', label: '转账', color: '#6366f1', bg: '#eef2ff', border: '#c7d2fe' },
+                      ] as const).map(opt => {
+                        const active = t.type === opt.val
+                        return (
+                          <button
+                            key={opt.val}
+                            onClick={() => changeTxnType(t.index, opt.val)}
+                            style={{
+                              flex: 1,
+                              padding: '4px 0',
+                              fontSize: 12,
+                              fontWeight: active ? 600 : 400,
+                              color: active ? opt.color : '#6b7280',
+                              background: active ? opt.bg : '#f9fafb',
+                              border: `1px solid ${active ? opt.border : '#e5e7eb'}`,
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                            }}>
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
 
                   {t.type !== 'transfer' && (
                     <select value={t.category_id || ''}
@@ -1221,6 +1502,8 @@ export default function ImportPage() {
         <button className="btn-primary" onClick={handleSave} disabled={saving}>
           {saving ? '导入中...' : `确认导入 ${selectedIdx.size + selectedReimIdx.size} 条`}
         </button>
+
+        {kwManagerModal}
       </div>
     </div>
   )

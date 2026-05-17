@@ -102,6 +102,14 @@ async def init_db():
                 category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
                 last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""",
+            """CREATE TABLE IF NOT EXISTS transfer_keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword VARCHAR(100) NOT NULL UNIQUE,
+                to_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                note VARCHAR(200) DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_used_at DATETIME
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))
