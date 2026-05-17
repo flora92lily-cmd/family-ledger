@@ -140,6 +140,32 @@ async def init_db():
             except Exception:
                 pass
 
+        # 4. merchant_categories 特殊迁移：category_id 由 NOT NULL → 可空（SQLite 不支持 ALTER COLUMN）
+        #    用 PRAGMA table_info 检测旧约束，命中则 rename→create→copy→drop
+        try:
+            info = (await conn.execute(text("PRAGMA table_info(merchant_categories)"))).fetchall()
+            # row: (cid, name, type, notnull, dflt_value, pk)
+            col_notnull = {row[1]: row[3] for row in info}
+            if col_notnull.get("category_id") == 1:  # 旧表 category_id 是 NOT NULL
+                await conn.execute(text("ALTER TABLE merchant_categories RENAME TO _mc_bak"))
+                await conn.execute(text("""
+                    CREATE TABLE merchant_categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        merchant VARCHAR(200) NOT NULL UNIQUE,
+                        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+                        account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                        to_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                        last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                await conn.execute(text(
+                    "INSERT INTO merchant_categories (id, merchant, category_id, last_used_at) "
+                    "SELECT id, merchant, category_id, last_used_at FROM _mc_bak"
+                ))
+                await conn.execute(text("DROP TABLE _mc_bak"))
+        except Exception:
+            pass
+
     # FamilyMember 已升级回一等模型，不再迁移到 Tag 体系
     # （历史 _migrate_members_to_tags 函数保留供调试，不再调用）
 
