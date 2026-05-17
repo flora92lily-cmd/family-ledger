@@ -214,15 +214,23 @@ class PaymentMethodMapping(Base):
 # ─── 商户分类记忆 ──────────────────────────────────────────────────────────────
 
 class MerchantCategory(Base):
-    """记忆：某个 counterparty（商户/对方） → category_id 映射，提升再次导入的自动分类准确率"""
+    """记忆：counterparty → 分类 + 账户的映射，提升再次导入的自动分类/账户填充准确率
+    - category_id: 仅 expense/income 有效；transfer 置空
+    - account_id:  支出/收入的付款账户；transfer 的转出账户
+    - to_account_id: 仅 transfer 有效，转入账户
+    """
     __tablename__ = "merchant_categories"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     merchant = Column(String(200), nullable=False, unique=True)   # counterparty 原值
-    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    to_account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     last_used_at = Column(DateTime, server_default=func.now())
 
     category = relationship("Category", foreign_keys=[category_id])
+    account = relationship("Account", foreign_keys=[account_id])
+    to_account = relationship("Account", foreign_keys=[to_account_id])
 
 
 # ─── 对手方转账关键词 ─────────────────────────────────────────────────────────────

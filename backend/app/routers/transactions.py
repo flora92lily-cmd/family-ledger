@@ -151,17 +151,26 @@ async def update_transaction(txn_id: int, data: TransactionUpdate, db: AsyncSess
     if tag_ids is not None:
         await _set_tags(txn_id, tag_ids, db)
 
-    # 商户记忆：用户手动改了分类，更新记忆供下次导入使用
-    if "category_id" in patch and txn.counterparty and txn.type in ("expense", "income"):
-        await db.execute(
-            sa_delete(MerchantCategory).where(MerchantCategory.merchant == txn.counterparty)
-        )
-        await db.execute(
-            sa_insert(MerchantCategory).values(
+    # 商户记忆：分类或账户有变化时，合并更新记忆供下次导入使用
+    if txn.counterparty and any(k in patch for k in ("category_id", "account_id", "to_account_id")):
+        existing_mc = (await db.execute(
+            select(MerchantCategory).where(MerchantCategory.merchant == txn.counterparty)
+        )).scalar_one_or_none()
+        if existing_mc:
+            if "category_id" in patch and txn.type in ("expense", "income"):
+                existing_mc.category_id = txn.category_id
+            if "account_id" in patch:
+                existing_mc.account_id = txn.account_id
+            if "to_account_id" in patch:
+                existing_mc.to_account_id = txn.to_account_id
+            existing_mc.last_used_at = datetime.now()
+        else:
+            await db.execute(sa_insert(MerchantCategory).values(
                 merchant=txn.counterparty,
-                category_id=txn.category_id,
-            )
-        )
+                category_id=txn.category_id if txn.type in ("expense", "income") else None,
+                account_id=txn.account_id,
+                to_account_id=txn.to_account_id,
+            ))
 
     await db.commit()
     result = await db.execute(

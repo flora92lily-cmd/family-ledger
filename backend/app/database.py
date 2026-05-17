@@ -99,7 +99,9 @@ async def init_db():
             """CREATE TABLE IF NOT EXISTS merchant_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 merchant VARCHAR(200) NOT NULL UNIQUE,
-                category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+                account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                to_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
                 last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""",
             """CREATE TABLE IF NOT EXISTS transfer_keywords (
@@ -129,6 +131,9 @@ async def init_db():
             "ALTER TABLE holdings ADD COLUMN account_id INTEGER REFERENCES accounts(id)",
             "ALTER TABLE family_members ADD COLUMN sort_order INTEGER DEFAULT 0",
             "ALTER TABLE holdings ADD COLUMN risk_class VARCHAR(20) DEFAULT 'other'",
+            # merchant_categories 新增账户字段（旧库兼容）
+            "ALTER TABLE merchant_categories ADD COLUMN account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL",
+            "ALTER TABLE merchant_categories ADD COLUMN to_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL",
         ]:
             try:
                 await conn.execute(text(stmt))

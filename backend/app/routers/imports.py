@@ -349,6 +349,16 @@ async def parse_bill(
                 acc_id = None
             pm_to_account[raw_name] = acc_id
 
+    # 商户账户记忆：预加载（payment_method_mappings 不命中时的兜底）
+    _counterparties = list({t.counterparty for t in transactions if t.counterparty})
+    merchant_acc_map: dict[str, MerchantCategory] = {}
+    if _counterparties:
+        _mc_rows = (await db.execute(
+            select(MerchantCategory).where(MerchantCategory.merchant.in_(_counterparties))
+        )).scalars().all()
+        merchant_acc_map = {mc.merchant: mc for mc in _mc_rows}
+    _valid_acc_ids = {a.id for a in accounts}  # 用于校验账户未被删除
+
     # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer + 显式双账户 transfer + 关键词命中 transfer 都填）
     parsed_out = []
     for i, t in enumerate(transactions):
@@ -365,6 +375,16 @@ async def parse_bill(
             # 对手方关键词命中：from 端按 payment_method 映射；to 端取关键词配置（可能为 None）
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
             prefilled_to_account_id = kw_to_account_by_index.get(i)
+
+        # 商户记忆兜底：payment_method_mappings 未命中时，按 counterparty 查历史账户
+        if t.counterparty:
+            _mc = merchant_acc_map.get(t.counterparty)
+            if _mc:
+                if prefilled_account_id is None and _mc.account_id and _mc.account_id in _valid_acc_ids:
+                    prefilled_account_id = _mc.account_id
+                if prefilled_to_account_id is None and _mc.to_account_id and _mc.to_account_id in _valid_acc_ids:
+                    prefilled_to_account_id = _mc.to_account_id
+
         parsed_out.append(ParsedTxnOut(
             index=i,
             amount=t.amount,
@@ -539,18 +559,44 @@ async def save_imported(req: ImportRequest, db: AsyncSession = Depends(get_db)):
 
         saved += 1
 
-    # upsert 商户记忆（counterparty → category_id），供下次导入自动分类使用
-    merchant_memory: dict[str, int] = {}
+    # upsert 商户记忆（counterparty → 分类 + 账户），供下次导入自动分类/账户填充使用
+    merchant_memory: dict[str, dict] = {}
     for t in req.transactions:
-        if t.counterparty and t.category_id and t.type in ("expense", "income"):
-            merchant_memory[t.counterparty] = t.category_id
-    for merchant, cat_id in merchant_memory.items():
-        await db.execute(
-            sa_delete(MerchantCategory).where(MerchantCategory.merchant == merchant)
-        )
-        await db.execute(
-            sa_insert(MerchantCategory).values(merchant=merchant, category_id=cat_id)
-        )
+        if not t.counterparty:
+            continue
+        key = t.counterparty
+        if key not in merchant_memory:
+            merchant_memory[key] = {"category_id": None, "account_id": None, "to_account_id": None}
+        if t.category_id and t.type in ("expense", "income"):
+            merchant_memory[key]["category_id"] = t.category_id
+        if t.account_id:
+            merchant_memory[key]["account_id"] = t.account_id
+        if t.to_account_id:
+            merchant_memory[key]["to_account_id"] = t.to_account_id
+    # 过滤：至少有一个字段有值
+    merchant_memory = {k: v for k, v in merchant_memory.items() if any(v.values())}
+    if merchant_memory:
+        existing_mcs = {mc.merchant: mc for mc in (await db.execute(
+            select(MerchantCategory).where(MerchantCategory.merchant.in_(merchant_memory.keys()))
+        )).scalars().all()}
+        for merchant, mem in merchant_memory.items():
+            existing = existing_mcs.get(merchant)
+            if existing:
+                # 合并：只覆盖非 None 字段，保留已有值
+                if mem["category_id"] is not None:
+                    existing.category_id = mem["category_id"]
+                if mem["account_id"] is not None:
+                    existing.account_id = mem["account_id"]
+                if mem["to_account_id"] is not None:
+                    existing.to_account_id = mem["to_account_id"]
+                existing.last_used_at = datetime.now()
+            else:
+                await db.execute(sa_insert(MerchantCategory).values(
+                    merchant=merchant,
+                    category_id=mem["category_id"],
+                    account_id=mem["account_id"],
+                    to_account_id=mem["to_account_id"],
+                ))
 
     reim_saved = 0
     reim_linked = 0
