@@ -149,6 +149,13 @@ class BankPdfParser(BaseParser):
                 continue
             apply_detection(t, "bank_pdf")
 
+        # 补齐 transfer 类交易的 counterparty（招行 PDF 多数情况 counterparty 为空，
+        # 缺失会让商户记忆无法记账户方向。用 description 作回填 key —
+        # "基金申购"/"基金赎回"/"信用卡自动还款" 等就成了稳定的记忆键）
+        for t in transactions:
+            if t.type == "transfer" and not t.counterparty and t.description:
+                t.counterparty = t.description
+
         return transactions
 
     def _parse_date(self, s: str) -> date | None:

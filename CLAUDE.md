@@ -114,6 +114,7 @@ backend/
       wechat.py            # WeChat xlsx (openpyxl, header at row 16), extracts 支付方式
       bank_pdf.py          # CMB bank PDF (pdfplumber word-level coordinate extraction)
                            #   解析后调用 apply_detection(t, "bank_pdf")：基金申购/赎回关键词识别
+                           #   投资/还款类 transfer 若 counterparty 为空，用 description 回填作为商户记忆 key
       qianji.py            # Qianji app CSV (UTF-8 BOM)；description=备注列（首页直接显示），
                            #   分类名走 source_category_name/source_parent_category_name 由 categorizer 直接按名匹配
                            #   类型=报销 → expense+is_reimbursable；类型=报销记录 → ParsedReimbursement
@@ -207,8 +208,14 @@ frontend/src/
 - **投资理财账户 current_balance**：`= sum(绑定持仓的 current_value)`，**不**加 `balance + 流水 delta`。原因：transfer 买入后资金逻辑上立刻变成持仓成本，由持仓市值接管，两者叠加会双计。
 - **买入**：`type=transfer`，资金账户 → 投资理财账户；save 时查账单日历史净值自动算份额（加权平均 cost_price）
 - **赎回/卖出**：`type=transfer`，投资理财账户 → 资金账户（成本部分）+ 盈亏记 income/expense
+- **账户方向 pre-fill 规则**（parse 端点）：
+  - 普通收支：`pm_to_account` → `account_id`
+  - 投资买入（detected_action="buy"）：`pm_to_account` → `account_id`（资金账户是 FROM）
+  - 投资赎回（detected_action="sell"）：`pm_to_account` → `to_account_id`（资金账户是 TO）
+  - 另一端（投资账户）从商户记忆或用户手动填
 - **基金代码识别**：账单（支付宝）只有名称，无代码。流程：① 本地 holdings 名称 substring 匹配；② 未命中则 Eastmoney fundsuggest 反查候选（最多 5 条）；③ 用户在预览页确认后当场建仓（new_holding_code 传给 save 端）
 - **股票份额**：本轮不自动算（腾讯接口无法查历史价）；识别为 transfer 但份额由用户事后手动调整
+- **bank_pdf 投资识别**：description 含 "基金申购"/"基金赎回"（含"基金快速赎回"）/ "证券保证金转出/入" → type=transfer + detected_action。bank_pdf 通常 counterparty 为空，parser 用 `description` 回填 counterparty 作为商户记忆 key（如 "基金申购"），保证下次导入能匹配同名记忆
 - **seed 分类**：income 新增「基金收益」「股票收益」「理财产品收益」；expense 新增「基金亏损」「股票亏损」「投资亏损」
 
 #### 其他模式

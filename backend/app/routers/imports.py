@@ -318,8 +318,8 @@ async def parse_bill(
             if r.external_id and r.external_id in existing_reim_set:
                 reim_dup.add(i)
 
-    # 历史账户映射查询：聚合需要按 payment_method 决定 from 账户的交易的 distinct payment_method
-    # （非 transfer 交易 + 投资买入/赎回 transfer——后者 from 端是资金账户，按 payment_method 映射
+    # 历史账户映射查询：聚合需要按 payment_method 映射账户的交易的 distinct payment_method
+    # （非 transfer 交易 + 投资买入/赎回 transfer——pm 是资金账户：买入→FROM，赎回→TO
     #   + 显式双账户 transfer——如钱迹"账户1/账户2"，两端都按 payment_method 映射
     #   + 对手方关键词命中的 transfer——from 端仍是 payment_method 账户）
     distinct_pm_set: set[str] = set()
@@ -365,8 +365,15 @@ async def parse_bill(
         tag_names: list[str] = t.tags or []
         prefilled_account_id: Optional[int] = None
         prefilled_to_account_id: Optional[int] = None
-        if t.type != "transfer" or t.detected_action:
+        if t.type != "transfer":
+            # 普通收支：付款账户 = pm_to_account
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
+        elif t.detected_action == "buy":
+            # 投资买入：资金账户(pm) → 投资/理财账户。资金账户是 FROM
+            prefilled_account_id = pm_to_account.get(t.payment_method or "")
+        elif t.detected_action == "sell":
+            # 投资赎回：投资/理财账户 → 资金账户(pm)。资金账户是 TO
+            prefilled_to_account_id = pm_to_account.get(t.payment_method or "")
         elif t.to_payment_method:
             # 显式双账户 transfer：两端都从映射取
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
