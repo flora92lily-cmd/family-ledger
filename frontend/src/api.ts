@@ -219,6 +219,7 @@ export interface ParsedTransaction {
   to_account_id: number | null
   member_id: number | null
   payment_method: string
+  to_payment_method: string  // 显式双账户 transfer（如钱迹"账户2"）
   raw: string
   is_duplicate: boolean
   tag_ids: number[]

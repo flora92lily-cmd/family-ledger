@@ -36,8 +36,10 @@ class ParsedTxnOut(BaseModel):
     counterparty: str
     category_id: Optional[int]
     category_name: Optional[str]
-    account_id: Optional[int] = None  # 由历史 payment_method 映射预填（仅非 transfer）
+    account_id: Optional[int] = None  # 由历史 payment_method 映射预填
+    to_account_id: Optional[int] = None  # 由历史 to_payment_method 映射预填（仅显式双账户 transfer）
     payment_method: str
+    to_payment_method: str = ""  # 显式双账户 transfer（如钱迹"账户2"）时填
     raw: str
     is_duplicate: bool = False
     tag_ids: list[int] = []        # 已解析/预填充的标签 ID（钱迹自动填）
@@ -298,12 +300,17 @@ async def parse_bill(
                 reim_dup.add(i)
 
     # 历史账户映射查询：聚合需要按 payment_method 决定 from 账户的交易的 distinct payment_method
-    # （非 transfer 交易 + 投资买入/赎回 transfer——后者 from 端是资金账户，按 payment_method 映射）
-    distinct_pm = sorted({
-        (t.payment_method or "")
-        for t in transactions
-        if t.type != "transfer" or t.detected_action
-    })
+    # （非 transfer 交易 + 投资买入/赎回 transfer——后者 from 端是资金账户，按 payment_method 映射
+    #   + 显式双账户 transfer——如钱迹"账户1/账户2"，两端都按 payment_method 映射）
+    distinct_pm_set: set[str] = set()
+    for t in transactions:
+        if t.type != "transfer" or t.detected_action:
+            distinct_pm_set.add(t.payment_method or "")
+        elif t.to_payment_method:
+            # 显式双账户 transfer：两端都加入映射
+            distinct_pm_set.add(t.payment_method or "")
+            distinct_pm_set.add(t.to_payment_method or "")
+    distinct_pm = sorted(distinct_pm_set)
     pm_to_account: dict[str, Optional[int]] = {}
     if distinct_pm:
         rows = (await db.execute(
@@ -319,13 +326,18 @@ async def parse_bill(
                 acc_id = None
             pm_to_account[raw_name] = acc_id
 
-    # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer 都填）
+    # 构造返回交易列表（用映射预填 account_id，对非转账 + 投资 transfer + 显式双账户 transfer 都填）
     parsed_out = []
     for i, t in enumerate(transactions):
         tag_names: list[str] = t.tags or []
         prefilled_account_id: Optional[int] = None
+        prefilled_to_account_id: Optional[int] = None
         if t.type != "transfer" or t.detected_action:
             prefilled_account_id = pm_to_account.get(t.payment_method or "")
+        elif t.to_payment_method:
+            # 显式双账户 transfer：两端都从映射取
+            prefilled_account_id = pm_to_account.get(t.payment_method or "")
+            prefilled_to_account_id = pm_to_account.get(t.to_payment_method or "")
         parsed_out.append(ParsedTxnOut(
             index=i,
             amount=t.amount,
@@ -336,7 +348,9 @@ async def parse_bill(
             category_id=t.category_id,
             category_name=t.category_name,
             account_id=prefilled_account_id,
+            to_account_id=prefilled_to_account_id,
             payment_method=t.payment_method,
+            to_payment_method=t.to_payment_method,
             raw=t.raw,
             is_duplicate=(i in duplicate_indices),
             tag_ids=[],

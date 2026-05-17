@@ -10,7 +10,9 @@
   - 报销 → 可报销支出（is_reimbursable=True），账户1=扣款账户
   - 报销记录 → 报销到账记录（不建 Transaction，建 ReimbursementRecord），
               账户1=到账账户，关联账单=原报销支出的 ID
-  - 还款/转账 → 跳过（转账在其他路径处理）
+  - 转账/还款 等双账户场景 → 由账户1+账户2 是否同时非空判定（见下），不依赖类型字符串
+- 转账识别：任何一行 账户1 与 账户2 同时非空 → type=transfer，
+            账户1=转出，账户2=转入（覆盖 类型=转账/还款/借出/借入 等）
 - 已报销列：值为"是" 表示该可报销支出已被报销；空表示待报销
 - 标签：作为家庭成员/项目等多维度标识
 
@@ -44,6 +46,7 @@ class QianjiParser(BaseParser):
             "type": self._find_col(headers, ["类型"]),
             "amount": self._find_col(headers, ["金额"]),
             "account": self._find_col(headers, ["账户1"]),
+            "account2": self._find_col(headers, ["账户2"]),
             "note": self._find_col(headers, ["备注"]),
             "reimbursed": self._find_col(headers, ["已报销"]),
             "tag": self._find_col(headers, ["标签"]),
@@ -113,6 +116,7 @@ class QianjiParser(BaseParser):
         row_id = safe("id")
         linked_id = safe("linked")
         payment_method = safe("account")
+        to_payment_method = safe("account2")
         note_text = safe("note")  # 钱迹"备注"列
 
         # 分支 1：报销记录 → ParsedReimbursement
@@ -127,7 +131,40 @@ class QianjiParser(BaseParser):
                 raw=",".join(row)[:200],
             )
 
-        # 分支 2：普通交易 / 报销支出
+        # 分支 2：账户1 + 账户2 同时非空 → transfer（覆盖 类型=转账/还款/借出/借入 等）
+        # 不依赖"类型"字符串，因为钱迹的"还款"等也是双账户语义
+        if payment_method and to_payment_method:
+            sub_cat = safe("subcategory")
+            parent_cat = safe("category")
+            tag_str = safe("tag")
+            tags = [t.strip() for t in tag_str.split(",") if t.strip()] if tag_str else []
+            # description 兜底：备注 > 二级分类 > 类型字符串(还款/转账) > 一级分类
+            # 一级分类常为"其它"无信息量，放最后；类型字符串("还款"/"转账")更直观
+            meaningful = lambda s: s and s not in ("其它", "其他")
+            desc = (
+                note_text
+                or (sub_cat if meaningful(sub_cat) else "")
+                or (type_str if type_str else "")
+                or (parent_cat if parent_cat else "")
+                or "转账"
+            )
+            return ParsedTransaction(
+                amount=amount,
+                type="transfer",
+                date=txn_date,
+                description=desc,
+                counterparty="",
+                payment_method=payment_method,
+                to_payment_method=to_payment_method,
+                tags=tags,
+                # 转账不归类（category_id 由用户在 APP 内决定，通常留空）
+                source_category_name=None,
+                source_parent_category_name=None,
+                external_id=row_id,
+                raw=",".join(row)[:200],
+            )
+
+        # 分支 3：普通交易 / 报销支出
         if type_str == "支出":
             txn_type = "expense"
             is_reimbursable = False
@@ -138,7 +175,7 @@ class QianjiParser(BaseParser):
             txn_type = "expense"
             is_reimbursable = True
         else:
-            # 还款 / 转账 跳过
+            # 类型=转账/还款 但缺一边账户，无法成立 transfer → 跳过
             return None
 
         # description = 备注（首页列表显示这一字段）

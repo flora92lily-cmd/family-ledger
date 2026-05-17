@@ -13,6 +13,7 @@ class ParsedTransaction:
     description: str = ""
     counterparty: str = ""
     payment_method: str = ""  # 支付方式（如"招商银行储蓄卡(1234)"、"余额宝"、"花呗"）
+    to_payment_method: str = ""  # 转入账户名（仅 type=transfer 且账单显式给出双账户时填，如钱迹"账户2"）
     raw: str = ""  # 原始行内容，便于调试
     tags: list = field(default_factory=list)  # 原始标签字符串列表（如钱迹的标签列）
 

@@ -252,6 +252,22 @@ export default function ImportPage() {
             to_account_id: t.to_account_id ?? fundAccount,
           }
         }
+        if (t.type === 'transfer' && t.to_payment_method) {
+          // 显式双账户 transfer（如钱迹"账户1/账户2"）：两端都用 payment_method_mappings 预填
+          const fromMap = initMap.get(t.payment_method || '')
+          const toMap = initMap.get(t.to_payment_method || '')
+          return {
+            ...t,
+            account_id: t.account_id
+              ?? (fromMap !== undefined ? fromMap : null)
+              ?? autoMatchAccount(t.payment_method, loadedAccounts)
+              ?? null,
+            to_account_id: t.to_account_id
+              ?? (toMap !== undefined ? toMap : null)
+              ?? autoMatchAccount(t.to_payment_method, loadedAccounts)
+              ?? null,
+          }
+        }
         if (t.type === 'transfer') {
           // 9.6 零钱通转账：根据 description 含"存入/转入"或"转出"判断方向
           const zqtId = matchAccountByKeywords(['零钱通'], loadedAccounts)
@@ -366,7 +382,10 @@ export default function ImportPage() {
     )
   }
 
-  // 改某个 payment_method 的目标账户：写 map state + 同步所有该 raw_name 的非转账交易
+  // 改某个 payment_method 的目标账户：写 map state + 同步所有该 raw_name 的交易
+  // - 非转账：raw_name 匹配 payment_method → 改 account_id
+  // - 显式双账户 transfer（如钱迹"账户1/账户2"）：raw_name 匹配 payment_method 改 account_id；匹配 to_payment_method 改 to_account_id
+  // - 其他 transfer（如微信零钱通启发式、投资 transfer）：保持不变，由 preview 页双账户选择器处理
   const updateMapping = (rawName: string, accountId: number | null) => {
     setAccountMappings(prev => {
       const next = new Map(prev)
@@ -374,7 +393,13 @@ export default function ImportPage() {
       return next
     })
     setTransactions(prev => prev.map(t => {
-      if (t.type === 'transfer') return t
+      if (t.type === 'transfer') {
+        if (!t.to_payment_method) return t  // 非显式双账户 transfer 不联动
+        const patch: Partial<typeof t> = {}
+        if ((t.payment_method || '') === rawName) patch.account_id = accountId
+        if ((t.to_payment_method || '') === rawName) patch.to_account_id = accountId
+        return Object.keys(patch).length ? { ...t, ...patch } : t
+      }
       if ((t.payment_method || '') === rawName) {
         return { ...t, account_id: accountId }
       }
@@ -573,7 +598,16 @@ export default function ImportPage() {
   if (step === 'mapping') {
     const pmCounts = new Map<string, number>()
     for (const t of transactions) {
-      if (t.type === 'transfer') continue
+      if (t.type === 'transfer') {
+        // 显式双账户 transfer（钱迹"账户1/账户2"）：两端都计入；其他 transfer 跳过
+        if (t.to_payment_method) {
+          const k1 = t.payment_method || ''
+          const k2 = t.to_payment_method || ''
+          pmCounts.set(k1, (pmCounts.get(k1) || 0) + 1)
+          pmCounts.set(k2, (pmCounts.get(k2) || 0) + 1)
+        }
+        continue
+      }
       const key = t.payment_method || ''
       pmCounts.set(key, (pmCounts.get(key) || 0) + 1)
     }
