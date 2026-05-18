@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, extract, insert as sa_insert, delete as sa_delete, case
 from sqlalchemy.orm import selectinload
-from datetime import date
+from datetime import date, datetime
 from app.database import get_db
 from app.models import Transaction, Category, Account, Tag, FamilyMember, transaction_tags, MerchantCategory
 from app.schemas import (
