@@ -64,13 +64,21 @@ def _detect_alipay(txn: ParsedTransaction) -> Optional[InvestmentInfo]:
 
 
 def _detect_bank_pdf(txn: ParsedTransaction) -> Optional[InvestmentInfo]:
-    """银行 PDF：description 含'证券交易'/'基金申购'/'基金赎回'。
-    名称提取困难，留空让用户在前端选择 holding。"""
+    """银行 PDF：description 含'申购'/'赎回'（含'基金快速赎回'等变体）/'证券保证金转出/入'/'证券+买入/卖出'。
+    名称提取困难，留空让用户在前端选择 holding。
+    注：理财类（朝朝盈/月月宝/理财申购 等）会在 apply_detection 的 _detect_bank_pdf_wealth 里先命中，
+       走"普通 transfer 双账户选择器"分支，不会进到本函数。"""
     desc = txn.description or ""
-    if "基金申购" in desc or "证券保证金转出" in desc or ("证券" in desc and "买入" in desc):
-        return InvestmentInfo(action="buy", asset_type="fund" if "基金" in desc else "stock", extracted_name="")
-    if "基金赎回" in desc or "证券保证金转入" in desc or ("证券" in desc and "卖出" in desc):
-        return InvestmentInfo(action="sell", asset_type="fund" if "基金" in desc else "stock", extracted_name="")
+    # 资产类型：含"证券"且不含"基金" → stock，其他默认 fund（最常见）
+    def _asset_type() -> str:
+        return "stock" if ("证券" in desc and "基金" not in desc) else "fund"
+
+    # 买入类：申购 / 证券保证金转出 / 证券+买入
+    if "申购" in desc or "证券保证金转出" in desc or ("证券" in desc and "买入" in desc):
+        return InvestmentInfo(action="buy", asset_type=_asset_type(), extracted_name="")
+    # 卖出类：赎回 / 证券保证金转入 / 证券+卖出
+    if "赎回" in desc or "证券保证金转入" in desc or ("证券" in desc and "卖出" in desc):
+        return InvestmentInfo(action="sell", asset_type=_asset_type(), extracted_name="")
     return None
 
 

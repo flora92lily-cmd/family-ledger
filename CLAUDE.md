@@ -215,7 +215,7 @@ frontend/src/
   - 另一端（投资账户）从商户记忆或用户手动填
 - **基金代码识别**：账单（支付宝）只有名称，无代码。流程：① 本地 holdings 名称 substring 匹配；② 未命中则 Eastmoney fundsuggest 反查候选（最多 5 条）；③ 用户在预览页确认后当场建仓（new_holding_code 传给 save 端）
 - **股票份额**：本轮不自动算（腾讯接口无法查历史价）；识别为 transfer 但份额由用户事后手动调整
-- **bank_pdf 投资识别**：description 含 "基金申购"/"基金赎回"（含"基金快速赎回"）/ "证券保证金转出/入" → type=transfer + detected_action。bank_pdf 通常 counterparty 为空，parser 用 `description` 回填 counterparty 作为商户记忆 key（如 "基金申购"），保证下次导入能匹配同名记忆
+- **bank_pdf 投资识别**：description 含 "申购"/"赎回"（含"基金申购"/"基金赎回"/"快速赎回"等变体）/ "证券保证金转出/入" / "证券+买入/卖出" → type=transfer + detected_action。资产类型默认 fund，仅 "证券" 且不含 "基金" 时识别为 stock。理财类（朝朝盈/月月宝/理财申购 等）走 `_detect_bank_pdf_wealth` 分支：只标 transfer 不写 detected_*，前端按普通双账户选择器渲染。bank_pdf 通常 counterparty 为空，parser 用 `description` 回填 counterparty 作为商户记忆 key（如 "基金申购"），保证下次导入能匹配同名记忆
 - **seed 分类**：income 新增「基金收益」「股票收益」「理财产品收益」；expense 新增「基金亏损」「股票亏损」「投资亏损」
 
 #### 其他模式
