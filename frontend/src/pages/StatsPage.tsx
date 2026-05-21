@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, memo } from 'react'
 import dayjs from 'dayjs'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
 import { BankIcon } from '../components/BankIcon'
+import { PeriodPickerSheet } from '../components/PeriodPickerSheet'
 import {
   statsApi,
   accountApi,
@@ -331,6 +332,8 @@ export default function StatsPage() {
   const [allocationLoading, setAllocationLoading] = useState(false)
   const [networthTrend, setNetworthTrend] = useState<NetWorthPoint[]>([])
   const [snapshotTaking, setSnapshotTaking] = useState(false)
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false)
+  const [yearPickerOpen, setYearPickerOpen] = useState(false)
 
   // Drill-down state
   const [drillTitle, setDrillTitle] = useState('')
@@ -491,9 +494,13 @@ export default function StatsPage() {
           {/* Month navigation */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <button onClick={prevMonth} style={{ fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', color: '#333', padding: '4px 8px', lineHeight: 1 }}>‹</button>
-            <span style={{ fontSize: 16, fontWeight: 600, color: '#333', minWidth: 96, textAlign: 'center' }}>
-              {year}-{String(month).padStart(2, '0')}
-            </span>
+            <button
+              onClick={() => setMonthPickerOpen(true)}
+              style={{ fontSize: 16, fontWeight: 600, color: '#333', minWidth: 96, textAlign: 'center', background: 'none', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '4px 8px' }}
+            >
+              <span>{year}-{String(month).padStart(2, '0')}</span>
+              <span style={{ fontSize: 11, color: '#888' }}>▾</span>
+            </button>
             <button onClick={nextMonth} style={{ fontSize: 22, background: 'none', border: 'none', cursor: isCurrentMonth ? 'default' : 'pointer', color: isCurrentMonth ? '#ccc' : '#333', padding: '4px 8px', lineHeight: 1 }}>›</button>
           </div>
 
@@ -549,7 +556,13 @@ export default function StatsPage() {
           {/* Year navigation */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <button onClick={() => setAnnualYear(y => y - 1)} style={{ fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', color: '#333', padding: '4px 8px', lineHeight: 1 }}>‹</button>
-            <span style={{ fontSize: 16, fontWeight: 600, color: '#333', minWidth: 60, textAlign: 'center' }}>{annualYear}</span>
+            <button
+              onClick={() => setYearPickerOpen(true)}
+              style={{ fontSize: 16, fontWeight: 600, color: '#333', minWidth: 60, textAlign: 'center', background: 'none', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '4px 8px' }}
+            >
+              <span>{annualYear}</span>
+              <span style={{ fontSize: 11, color: '#888' }}>▾</span>
+            </button>
             <button onClick={() => setAnnualYear(y => Math.min(y + 1, now.year()))} style={{ fontSize: 22, background: 'none', border: 'none', cursor: annualYear >= now.year() ? 'default' : 'pointer', color: annualYear >= now.year() ? '#ccc' : '#333', padding: '4px 8px', lineHeight: 1 }}>›</button>
           </div>
 
@@ -1028,6 +1041,22 @@ export default function StatsPage() {
           </div>
         </div>
       )}
+
+      <PeriodPickerSheet
+        open={monthPickerOpen}
+        onClose={() => setMonthPickerOpen(false)}
+        mode="month"
+        year={year}
+        month={month}
+        onChange={(y, m) => setPeriod({ year: y, month: m || 1 })}
+      />
+      <PeriodPickerSheet
+        open={yearPickerOpen}
+        onClose={() => setYearPickerOpen(false)}
+        mode="year"
+        year={annualYear}
+        onChange={y => setAnnualYear(y)}
+      />
     </div>
   )
 }

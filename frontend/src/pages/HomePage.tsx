@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { transactionApi, type Transaction, type MonthlySummary } from '../api'
 import { TxnDetailSheet } from '../components/TxnDetailSheet'
+import { PeriodPickerSheet } from '../components/PeriodPickerSheet'
 import {
   txnIcon, txnTitle, txnSubMeta, txnAccountEl, txnAmountStr, txnAmountColor,
 } from '../utils/txnRender'
@@ -12,6 +13,7 @@ export default function HomePage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [summary, setSummary] = useState<MonthlySummary | null>(null)
   const [selected, setSelected] = useState<Transaction | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const now = dayjs()
   const [viewDate, setViewDate] = useState(now.startOf('month'))
   const year = viewDate.year()
@@ -56,7 +58,13 @@ export default function HomePage() {
         <div className="month-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
           <button onClick={() => setViewDate(d => d.subtract(1, 'month'))}
             style={{ background: 'none', border: 'none', fontSize: 22, color: 'white', cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}>‹</button>
-          <span>{year}年{month}月</span>
+          <button
+            onClick={() => setPickerOpen(true)}
+            style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4, font: 'inherit' }}
+          >
+            <span>{year}年{month}月</span>
+            <span style={{ fontSize: 12, opacity: 0.8 }}>▾</span>
+          </button>
           <button onClick={() => setViewDate(d => d.add(1, 'month'))}
             disabled={isCurrentMonth}
             style={{ background: 'none', border: 'none', fontSize: 22, color: isCurrentMonth ? 'rgba(255,255,255,0.3)' : 'white', cursor: isCurrentMonth ? 'default' : 'pointer', lineHeight: 1, padding: '0 4px' }}>›</button>
@@ -138,6 +146,15 @@ export default function HomePage() {
           onDelete={handleDelete}
         />
       )}
+
+      <PeriodPickerSheet
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        mode="month"
+        year={year}
+        month={month}
+        onChange={(y, m) => setViewDate(dayjs().year(y).month((m || 1) - 1).startOf('month'))}
+      />
     </div>
   )
 }
