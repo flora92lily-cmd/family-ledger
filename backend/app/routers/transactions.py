@@ -25,10 +25,17 @@ async def list_transactions(
     year: int = None,
     month: int = None,
     tag_id: int = None,
-    category_id: int = None,
+    tag_ids: list[int] = Query(default=None),  # 多选标签（并集）
+    category_id: int = None,  # 父类自动展开子类
     type: str = None,
     member_id: int = None,  # 0 = 仅未指定（NULL），>0 = 指定成员
     account_id: int = None,  # 同时匹配 account_id 与 to_account_id（覆盖转账双向）
+    q: str = None,  # 关键词，搜 description + counterparty
+    min_amount: float = None,
+    max_amount: float = None,
+    start_date: date = None,
+    end_date: date = None,
+    limit: int = Query(default=500, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -41,6 +48,7 @@ async def list_transactions(
             selectinload(Transaction.tags),
         )
         .order_by(Transaction.date.desc(), Transaction.id.desc())
+        .limit(limit)
     )
     if year:
         query = query.where(extract("year", Transaction.date) == year)
@@ -54,8 +62,22 @@ async def list_transactions(
                 )
             )
         )
+    if tag_ids:
+        query = query.where(
+            Transaction.id.in_(
+                select(transaction_tags.c.transaction_id).where(
+                    transaction_tags.c.tag_id.in_(tag_ids)
+                )
+            )
+        )
     if category_id:
-        query = query.where(Transaction.category_id == category_id)
+        # 若 category_id 是父类，自动展开包含全部子类
+        child_r = await db.execute(
+            select(Category.id).where(Category.parent_id == category_id)
+        )
+        child_ids = [row[0] for row in child_r.all()]
+        all_cat_ids = [category_id] + child_ids
+        query = query.where(Transaction.category_id.in_(all_cat_ids))
     if type:
         query = query.where(Transaction.type == type)
     if member_id is not None:
@@ -68,6 +90,21 @@ async def list_transactions(
             (Transaction.account_id == account_id) |
             (Transaction.to_account_id == account_id)
         )
+    if q:
+        like = f"%{q.strip()}%"
+        # SQLite LIKE 默认大小写不敏感（ASCII），中文逐字匹配也 OK
+        query = query.where(
+            (Transaction.description.like(like)) |
+            (Transaction.counterparty.like(like))
+        )
+    if min_amount is not None:
+        query = query.where(Transaction.amount >= min_amount)
+    if max_amount is not None:
+        query = query.where(Transaction.amount <= max_amount)
+    if start_date is not None:
+        query = query.where(Transaction.date >= start_date)
+    if end_date is not None:
+        query = query.where(Transaction.date <= end_date)
     result = await db.execute(query)
     return result.scalars().all()
 

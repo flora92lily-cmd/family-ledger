@@ -4,9 +4,7 @@ import dayjs from 'dayjs'
 import { transactionApi, type Transaction, type MonthlySummary } from '../api'
 import { TxnDetailSheet } from '../components/TxnDetailSheet'
 import { PeriodPickerSheet } from '../components/PeriodPickerSheet'
-import {
-  txnIcon, txnTitle, txnSubMeta, txnAccountEl, txnAmountStr, txnAmountColor,
-} from '../utils/txnRender'
+import { TransactionCard } from '../components/TransactionCard'
 
 export default function HomePage() {
   const navigate = useNavigate()
@@ -54,7 +52,23 @@ export default function HomePage() {
 
   return (
     <div className="page-content">
-      <div className="summary-header">
+      <div className="summary-header" style={{ position: 'relative' }}>
+        <button
+          onClick={() => navigate('/search')}
+          aria-label="搜索账单"
+          style={{
+            position: 'absolute', top: 12, right: 12,
+            width: 32, height: 32, padding: 0,
+            background: 'transparent', border: 'none',
+            color: 'white', cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </button>
         <div className="month-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
           <button onClick={() => setViewDate(d => d.subtract(1, 'month'))}
             style={{ background: 'none', border: 'none', fontSize: 22, color: 'white', cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}>‹</button>
@@ -98,41 +112,9 @@ export default function HomePage() {
               <div className="date-header">
                 {dayjs(date).format('MM月DD日')} {dayName(date)}
               </div>
-              {txns.map(txn => {
-                const subMeta = txnSubMeta(txn)
-                const accountEl = txnAccountEl(txn)
-                return (
-                  <div key={txn.id} className="txn-item" onClick={() => setSelected(txn)}>
-                    <div className="icon">{txnIcon(txn)}</div>
-                    <div className="info">
-                      <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>{txnTitle(txn)}</span>
-                        {txn.is_reimbursable && txn.reimbursement_status === 'pending' && (
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#fef3c7', color: '#b45309', fontWeight: 500 }}>
-                            待报销
-                          </span>
-                        )}
-                        {txn.is_reimbursable && txn.reimbursement_status === 'done' && (
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#dcfce7', color: '#15803d', fontWeight: 500 }}>
-                            已报销
-                          </span>
-                        )}
-                      </div>
-                      {subMeta && <div className="meta">{subMeta}</div>}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', minWidth: 0 }}>
-                      <div className="amount" style={{ color: txnAmountColor(txn) }}>
-                        {txnAmountStr(txn)}
-                      </div>
-                      {accountEl && (
-                        <div className="meta" style={{ marginTop: 2, fontSize: 11, color: '#9ca3af', maxWidth: 160, overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                          {accountEl}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
+              {txns.map(txn => (
+                <TransactionCard key={txn.id} txn={txn} onClick={setSelected} />
+              ))}
             </div>
           ))
         )}
