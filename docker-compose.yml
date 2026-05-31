@@ -20,7 +20,7 @@ services:
     container_name: family-ledger-caddy
     restart: unless-stopped
     ports:
-      - "${CADDY_HOST_PORT:-80}:80"
+      - "127.0.0.1:${CADDY_HOST_PORT:-18080}:80"
     environment:
       - TZ=Asia/Shanghai
     env_file:
