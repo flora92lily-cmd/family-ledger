@@ -5,8 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: family-ledger
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     environment:
       - PORT=8080
       - DATABASE_URL=sqlite+aiosqlite:////data/family_ledger.db
@@ -14,3 +14,24 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - ./data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: family-ledger-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      - TZ=Asia/Shanghai
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER}
+      - BASIC_AUTH_HASH=${BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:
