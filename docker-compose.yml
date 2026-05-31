@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: family-ledger
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_URL=sqlite+aiosqlite:////data/family_ledger.db
+      - PYTHONIOENCODING=utf-8
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data
