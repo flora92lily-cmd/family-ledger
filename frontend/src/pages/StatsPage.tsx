@@ -307,15 +307,24 @@ const DailyView = memo(function DailyView({ data, loading, viewType, onDrillDay,
 export default function StatsPage() {
   const navigate = useNavigate()
   const now = dayjs()
-  const [topTab, setTopTab] = useState<TopTab>('monthly')
-  const [period, setPeriod] = useState({ year: now.year(), month: now.month() + 1 })
+  // 从编辑页返回时把 sessionStorage 快照作为初始 state，避免初次 fetch 与 restore fetch 竞态
+  const [restored] = useState<Record<string, unknown> | null>(() => {
+    const raw = sessionStorage.getItem('stats:returnState')
+    if (!raw) return null
+    sessionStorage.removeItem('stats:returnState')
+    try { return JSON.parse(raw) } catch { return null }
+  })
+  const [topTab, setTopTab] = useState<TopTab>((restored?.topTab as TopTab) || 'monthly')
+  const [period, setPeriod] = useState((restored?.period as { year: number; month: number }) || { year: now.year(), month: now.month() + 1 })
   const { year, month } = period
-  const [annualYear, setAnnualYear] = useState(now.year())
-  const [annualType, setAnnualType] = useState<'expense' | 'income'>('expense')
+  const [annualYear, setAnnualYear] = useState((restored?.annualYear as number) || now.year())
+  const [annualType, setAnnualType] = useState<'expense' | 'income'>((restored?.annualType as 'expense' | 'income') || 'expense')
   const [annualLegend, setAnnualLegend] = useState<Set<string>>(new Set(['expense']))
-  const [viewType, setViewType] = useState<'expense' | 'income'>('expense')
-  const [subTab, setSubTab] = useState<SubTab>('category')
-  const [memberId, setMemberId] = useState<number | null | undefined>(undefined)  // undefined=all, null=-1=unassigned, number=specific
+  const [viewType, setViewType] = useState<'expense' | 'income'>((restored?.viewType as 'expense' | 'income') || 'expense')
+  const [subTab, setSubTab] = useState<SubTab>((restored?.subTab as SubTab) || 'category')
+  const [memberId, setMemberId] = useState<number | null | undefined>(
+    restored && 'memberId' in restored ? (restored.memberId as number | null | undefined) : undefined
+  )  // undefined=all, null=-1=unassigned, number=specific
 
   const [members, setMembers] = useState<FamilyMember[]>([])
   const [summary, setSummary] = useState<MonthlySummaryStats | null>(null)
@@ -1029,7 +1038,14 @@ export default function StatsPage() {
                 style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
                 关闭
               </button>
-              <button onClick={() => { const id = selectedTxn.id; setSelectedTxn(null); navigate(`/add?id=${id}`) }}
+              <button onClick={() => {
+                  const id = selectedTxn.id
+                  setSelectedTxn(null)
+                  sessionStorage.setItem('stats:returnState', JSON.stringify({
+                    topTab, period, annualYear, annualType, viewType, subTab, memberId,
+                  }))
+                  navigate(`/add?id=${id}`)
+                }}
                 style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
                 编辑
               </button>

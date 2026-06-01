@@ -6,6 +6,17 @@ import { TxnDetailSheet } from '../components/TxnDetailSheet'
 import { PeriodPickerSheet } from '../components/PeriodPickerSheet'
 import { TransactionCard } from '../components/TransactionCard'
 
+const VIEW_DATE_KEY = 'home:viewDate'
+
+const initialViewDate = () => {
+  const raw = sessionStorage.getItem(VIEW_DATE_KEY)
+  if (raw) {
+    const d = dayjs(raw)
+    if (d.isValid()) return d.startOf('month')
+  }
+  return dayjs().startOf('month')
+}
+
 export default function HomePage() {
   const navigate = useNavigate()
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -13,10 +24,14 @@ export default function HomePage() {
   const [selected, setSelected] = useState<Transaction | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const now = dayjs()
-  const [viewDate, setViewDate] = useState(now.startOf('month'))
+  const [viewDate, setViewDate] = useState(initialViewDate)
   const year = viewDate.year()
   const month = viewDate.month() + 1
   const isCurrentMonth = viewDate.isSame(now, 'month')
+
+  useEffect(() => {
+    sessionStorage.setItem(VIEW_DATE_KEY, viewDate.format('YYYY-MM'))
+  }, [viewDate])
 
   const load = () => {
     transactionApi.list({ year, month }).then(r => setTransactions(r.data))

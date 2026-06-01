@@ -137,10 +137,11 @@ export default function AddPage() {
       }
       if (isEdit && editId) {
         await transactionApi.update(Number(editId), payload)
+        navigate(-1)
       } else {
         await transactionApi.create({ ...payload, source: 'manual', reimbursement_status: reimEnabled ? 'pending' : 'none' })
+        navigate('/')
       }
-      navigate('/')
     } catch (e: unknown) {
       // 兼容 FastAPI 两种错误格式：
       //   1) HTTPException → detail: string

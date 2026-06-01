@@ -57,6 +57,16 @@ export default function SearchPage() {
       })
   }, [])
 
+  // 从编辑页返回时恢复 filter（仅恢复一次）
+  useEffect(() => {
+    const raw = sessionStorage.getItem('search:returnState')
+    if (!raw) return
+    sessionStorage.removeItem('search:returnState')
+    try {
+      setFilters(JSON.parse(raw))
+    } catch { /* ignore */ }
+  }, [])
+
   // 判断是否所有 filter 都是空（无搜索条件）
   const isEmpty = useMemo(() => (
     !filters.q.trim() &&
@@ -105,6 +115,7 @@ export default function SearchPage() {
 
   const handleEdit = (txn: Transaction) => {
     setSelected(null)
+    sessionStorage.setItem('search:returnState', JSON.stringify(filters))
     navigate(`/add?id=${txn.id}`)
   }
 
