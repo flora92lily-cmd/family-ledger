@@ -1033,10 +1033,21 @@ export default function StatsPage() {
               {selectedTxn.counterparty && <div>对方：{selectedTxn.counterparty}</div>}
               <div>来源：{selectedTxn.source === 'manual' ? '手动记账' : selectedTxn.source}</div>
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <button onClick={() => setSelectedTxn(null)}
                 style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
                 关闭
+              </button>
+              <button onClick={() => {
+                  const id = selectedTxn.id
+                  setSelectedTxn(null)
+                  sessionStorage.setItem('stats:returnState', JSON.stringify({
+                    topTab, period, annualYear, annualType, viewType, subTab, memberId,
+                  }))
+                  navigate(`/add?copy=${id}`)
+                }}
+                style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+                复制
               </button>
               <button onClick={() => {
                   const id = selectedTxn.id

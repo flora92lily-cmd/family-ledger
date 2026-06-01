@@ -7,10 +7,11 @@ interface Props {
   txn: Transaction
   onClose: () => void
   onEdit: (txn: Transaction) => void
+  onCopy: (txn: Transaction) => void
   onDelete: (txn: Transaction) => void
 }
 
-export function TxnDetailSheet({ txn, onClose, onEdit, onDelete }: Props) {
+export function TxnDetailSheet({ txn, onClose, onEdit, onCopy, onDelete }: Props) {
   const [linkedRecord, setLinkedRecord] = useState<ReimbursementRecord | null>(null)
 
   useEffect(() => {
@@ -88,10 +89,14 @@ export function TxnDetailSheet({ txn, onClose, onEdit, onDelete }: Props) {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <button onClick={onClose}
             style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: 15, cursor: 'pointer' }}>
             关闭
+          </button>
+          <button onClick={() => onCopy(txn)}
+            style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+            复制
           </button>
           <button onClick={() => onEdit(txn)}
             style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>

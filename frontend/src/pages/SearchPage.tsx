@@ -119,6 +119,12 @@ export default function SearchPage() {
     navigate(`/add?id=${txn.id}`)
   }
 
+  const handleCopy = (txn: Transaction) => {
+    setSelected(null)
+    sessionStorage.setItem('search:returnState', JSON.stringify(filters))
+    navigate(`/add?copy=${txn.id}`)
+  }
+
   // 选中的分类显示文本
   const selectedCategoryLabel = useMemo(() => {
     if (filters.category_id == null) return '不限'
@@ -440,6 +446,7 @@ export default function SearchPage() {
           txn={selected}
           onClose={() => setSelected(null)}
           onEdit={handleEdit}
+          onCopy={handleCopy}
           onDelete={handleDelete}
         />
       )}

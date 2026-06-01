@@ -63,6 +63,11 @@ export default function AccountDetailPage() {
     navigate(`/add?id=${txn.id}`)
   }
 
+  const handleCopy = (txn: Transaction) => {
+    setSelected(null)
+    navigate(`/add?copy=${txn.id}`)
+  }
+
   // 按日期分组
   const grouped = txns.reduce<Record<string, Transaction[]>>((acc, t) => {
     if (!acc[t.date]) acc[t.date] = []
@@ -247,6 +252,7 @@ export default function AccountDetailPage() {
           txn={selected}
           onClose={() => setSelected(null)}
           onEdit={handleEdit}
+          onCopy={handleCopy}
           onDelete={handleDelete}
         />
       )}

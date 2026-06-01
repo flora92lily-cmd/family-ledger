@@ -10,7 +10,10 @@ export default function AddPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('id')
+  const copyId = searchParams.get('copy')
   const isEdit = !!editId
+  const isCopy = !!copyId
+  const sourceId = editId || copyId
 
   const [type, setType] = useState<TxnType>('expense')
   const [amount, setAmount] = useState('')
@@ -27,7 +30,7 @@ export default function AddPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [members, setMembers] = useState<FamilyMember[]>([])
   const [submitting, setSubmitting] = useState(false)
-  const [loading, setLoading] = useState(isEdit)
+  const [loading, setLoading] = useState(isEdit || isCopy)
   // 报销相关
   const [isReimbursable, setIsReimbursable] = useState(false)
   const [reimbursableAmount, setReimbursableAmount] = useState('')
@@ -40,10 +43,10 @@ export default function AddPage() {
     memberApi.list().then(r => setMembers(r.data))
   }, [])
 
-  // 编辑模式：加载交易并预填表单
+  // 编辑/复制模式：加载交易并预填表单
   useEffect(() => {
-    if (!editId) return
-    transactionApi.get(Number(editId)).then(r => {
+    if (!sourceId) return
+    transactionApi.get(Number(sourceId)).then(r => {
       const t = r.data
       setType(t.type)
       setAmount(String(t.amount))
@@ -71,18 +74,18 @@ export default function AddPage() {
       navigate('/')
     })
     // 注意：catTree 在另一个 effect 里加载，分类展开逻辑见下
-  }, [editId])
+  }, [sourceId])
 
-  // catTree 加载完成后，如果是编辑模式且 category_id 存在，补展开父分类
+  // catTree 加载完成后，如果是编辑/复制模式且 category_id 存在，补展开父分类
   useEffect(() => {
-    if (!isEdit || !categoryId || catTree.length === 0) return
+    if (!(isEdit || isCopy) || !categoryId || catTree.length === 0) return
     for (const parent of catTree) {
       if (parent.children.some(c => c.id === categoryId)) {
         setExpandedParent(parent.id)
         return
       }
     }
-  }, [catTree, categoryId, isEdit])
+  }, [catTree, categoryId, isEdit, isCopy])
 
   const filteredTree = catTree.filter(c => c.type === (type === 'transfer' ? 'expense' : type))
 
@@ -183,12 +186,14 @@ export default function AddPage() {
     {}
   )
 
+  const pageTitle = isEdit ? '编辑账单' : (isCopy ? '复制账单' : '记一笔')
+
   if (loading) {
     return (
       <div className="form-page">
         <div className="page-header">
           <button className="back-btn" onClick={() => navigate('/')}>←</button>
-          编辑账单
+          {pageTitle}
         </div>
         <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>加载中...</div>
       </div>
@@ -199,7 +204,7 @@ export default function AddPage() {
     <div className="form-page">
       <div className="page-header">
         <button className="back-btn" onClick={() => navigate('/')}>←</button>
-        {isEdit ? '编辑账单' : '记一笔'}
+        {pageTitle}
       </div>
 
       <div className="type-toggle">

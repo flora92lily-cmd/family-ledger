@@ -55,6 +55,11 @@ export default function HomePage() {
     navigate(`/add?id=${txn.id}`)
   }
 
+  const handleCopy = (txn: Transaction) => {
+    setSelected(null)
+    navigate(`/add?copy=${txn.id}`)
+  }
+
   // Group transactions by date
   const grouped = transactions.reduce<Record<string, Transaction[]>>((acc, txn) => {
     const d = txn.date
@@ -140,6 +145,7 @@ export default function HomePage() {
           txn={selected}
           onClose={() => setSelected(null)}
           onEdit={handleEdit}
+          onCopy={handleCopy}
           onDelete={handleDelete}
         />
       )}
