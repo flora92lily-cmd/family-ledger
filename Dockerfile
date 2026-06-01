@@ -8,6 +8,11 @@ RUN apt-get update && apt-get install -y curl && \
 
 WORKDIR /app
 
+# 配置国内镜像源（境内服务器访问境外 PyPI/npm 经常超时）
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
+    npm config set registry https://registry.npmmirror.com
+
 # 安装前端依赖并构建
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
