@@ -10,7 +10,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: SSH and redeploy
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rsync source to server
+        # 京东云服务器→github.com 网络不稳定（curl 28 超时），改用 rsync 直推：
+        # GitHub Actions 跑在境外节点拉代码，再 rsync over SSH 推到服务器 IP，
+        # 完全不依赖服务器能否访问 github。
+        # 故意不加 --delete：避免 exclude 写漏时误删运行期数据；
+        # 镜像由 Dockerfile COPY 当前目录构建，宿主机残留旧文件不会污染容器。
+        uses: burnett01/rsync-deployments@7.0.2
+        with:
+          switches: >-
+            -avzr
+            --exclude='.git/'
+            --exclude='.github/'
+            --exclude='.claude/'
+            --exclude='data/'
+            --exclude='node_modules/'
+            --exclude='backend/venv/'
+            --exclude='backend/dist/'
+            --exclude='backend/__pycache__/'
+            --exclude='backend/family_ledger.db*'
+            --exclude='*.pyc'
+            --exclude='.env'
+            --exclude='.vite/'
+          path: ./
+          remote_path: ~/code/family-ledger/
+          remote_host: ${{ secrets.SERVER_HOST }}
+          remote_user: ${{ secrets.SERVER_USER }}
+          remote_key: ${{ secrets.SERVER_SSH_KEY }}
+          remote_port: ${{ secrets.SERVER_PORT || 22 }}
+
+      - name: Rebuild and restart containers
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -22,14 +54,11 @@ jobs:
             set -e
             cd ~/code/family-ledger
 
-            echo "==> [1/4] git pull"
-            git pull --ff-only
-
-            echo "==> [2/4] rebuild & restart containers"
+            echo "==> [1/3] rebuild & restart containers"
             docker compose up -d --build
 
-            echo "==> [3/4] prune dangling images"
+            echo "==> [2/3] prune dangling images"
             docker image prune -f
 
-            echo "==> [4/4] status"
+            echo "==> [3/3] status"
             docker compose ps
