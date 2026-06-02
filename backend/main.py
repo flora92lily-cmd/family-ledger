@@ -22,11 +22,20 @@ class CacheControlledStaticFiles(StaticFiles):
     """
     async def get_response(self, path: str, scope: Scope):
         response = await super().get_response(path, scope)
-        if response.status_code == 200:
-            if path in ("", "index.html", "manifest.json") or path.endswith(".html"):
+        if response.status_code == 404:
+            # SPA fallback：未匹配到的非 API 路径回退到 index.html，
+            # 防止前端深层路由（/import、/add 等）刷新时拿到 FastAPI 的 JSON 404。
+            # API 路由已在上方 include_router 注册，优先级高于本 mount，不会走到这里。
+            index = os.path.join(self.directory, "index.html")
+            if os.path.isfile(index):
+                return FileResponse(index, headers={"Cache-Control": "no-cache, must-revalidate"})
+        elif response.status_code == 200:
+            if path in ("", "index.html", "manifest.json", "manifest.webmanifest") or path.endswith(".html"):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             elif path.startswith("assets/"):
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif path == "sw.js" or path.startswith("workbox-"):
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
             else:
                 response.headers["Cache-Control"] = "public, max-age=3600"
         return response

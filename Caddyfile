@@ -1,9 +1,21 @@
 :80 {
-	basicauth {
-		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	# PWA 关键静态资源不要 basicauth：
+	# Chrome 抓 manifest.webmanifest / sw.js 时默认不带凭据（crossorigin=anonymous），
+	# 套 basicauth 会返回 401 → 浏览器认为没 manifest → 无法安装为 PWA。
+	# icons/ 用于桌面/启动图，favicon 用于浏览器 tab，assets/ 是带 hash 的构建产物。
+	@public {
+		path /manifest.webmanifest /manifest.json /sw.js /workbox-*.js /registerSW.js /favicon.svg /icons/* /assets/* /logos/*
+	}
+	handle @public {
+		reverse_proxy app:8080
 	}
 
-	reverse_proxy app:8080
+	handle {
+		basicauth {
+			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		}
+		reverse_proxy app:8080
+	}
 
 	encode gzip
 

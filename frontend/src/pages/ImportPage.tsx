@@ -124,6 +124,11 @@ export default function ImportPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // 导入草稿键：bump 后缀可一次性失效旧客户端的草稿（schema 改了时用）
+  const DRAFT_KEY = 'import_draft_v1'
+  // 标记本轮 state 变更是来自草稿恢复，避免恢复后立刻又把"恢复后的 state"写一遍 sessionStorage
+  const draftRestoringRef = useRef(false)
+
   useEffect(() => {
     categoryApi.tree().then(r => setCatTree(r.data))
     tagApi.list({ include_archived: false }).then(r => setTags(r.data))
@@ -132,6 +137,107 @@ export default function ImportPage() {
     holdingApi.list().then(r => setHoldings(r.data))
     transferKeywordApi.list().then(r => setTransferKeywords(r.data)).catch(() => { /* ignore */ })
   }, [])
+
+  // 草稿恢复：mount 时若 sessionStorage 有上一次未完成的导入，问用户要不要恢复
+  useEffect(() => {
+    let raw: string | null = null
+    try { raw = sessionStorage.getItem(DRAFT_KEY) } catch { return }
+    if (!raw) return
+    let draft: Record<string, unknown> | null = null
+    try { draft = JSON.parse(raw) } catch { sessionStorage.removeItem(DRAFT_KEY); return }
+    const txns = (draft?.transactions as ParsedTransaction[] | undefined) || []
+    const reims = (draft?.reimbursements as ParsedReimbursement[] | undefined) || []
+    if (txns.length === 0 && reims.length === 0) {
+      sessionStorage.removeItem(DRAFT_KEY)
+      return
+    }
+    const stepLabel = draft?.step === 'preview' ? '预览确认' : '账户映射'
+    const ok = window.confirm(
+      `检测到上次未完成的导入草稿\n（${txns.length} 条交易，停留在"${stepLabel}"步骤）\n是否恢复？\n\n确定 = 恢复\n取消 = 丢弃草稿`
+    )
+    if (!ok) {
+      sessionStorage.removeItem(DRAFT_KEY)
+      return
+    }
+    draftRestoringRef.current = true
+    setStep((draft?.step as 'select' | 'mapping' | 'preview') || 'select')
+    setSource((draft?.source as string) || '')
+    setTransactions(txns)
+    setReimbursements(reims)
+    setSelectedIdx(new Set((draft?.selectedIdx as number[]) || []))
+    setSelectedReimIdx(new Set((draft?.selectedReimIdx as number[]) || []))
+    setAccountMappings(new Map((draft?.accountMappings as [string, number | null][]) || []))
+    setRememberedRawNames(new Set((draft?.rememberedRawNames as string[]) || []))
+    setBatchTagIds((draft?.batchTagIds as number[]) || [])
+    setBatchMemberId((draft?.batchMemberId as number | null) ?? null)
+    setPendingNewHoldings(new Map(
+      (draft?.pendingNewHoldings as [string, { code: string; name: string; account_id: number | null }][]) || []
+    ))
+    setQianjiStartDate((draft?.qianjiStartDate as string) || '')
+    setQianjiEndDate((draft?.qianjiEndDate as string) || '')
+    setDupCount((draft?.dupCount as number) || 0)
+    setReimDupCount((draft?.reimDupCount as number) || 0)
+    setFilteredOutCount((draft?.filteredOutCount as number) || 0)
+    // 重建 originalParsedRef，使钱迹"标签转成员" toggle 在恢复后仍可来回切换
+    const origMap = new Map<number, { tag_names: string[]; member_id: number | null }>()
+    txns.forEach(t => origMap.set(t.index, { tag_names: [...t.tag_names], member_id: t.member_id }))
+    originalParsedRef.current = origMap
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 自动持久化：关键 state 变化时写 sessionStorage（草稿恢复触发的那一次跳过）
+  useEffect(() => {
+    if (draftRestoringRef.current) {
+      draftRestoringRef.current = false
+      return
+    }
+    // 没有任何数据（初始 select 步骤）就清掉草稿，不留垃圾
+    if (step === 'select' && transactions.length === 0 && reimbursements.length === 0) {
+      try { sessionStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+      return
+    }
+    try {
+      const draft = {
+        step,
+        source,
+        transactions,
+        reimbursements,
+        selectedIdx: [...selectedIdx],
+        selectedReimIdx: [...selectedReimIdx],
+        accountMappings: [...accountMappings.entries()],
+        rememberedRawNames: [...rememberedRawNames],
+        batchTagIds,
+        batchMemberId,
+        pendingNewHoldings: [...pendingNewHoldings.entries()],
+        qianjiStartDate,
+        qianjiEndDate,
+        dupCount,
+        reimDupCount,
+        filteredOutCount,
+      }
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    } catch {
+      /* quota exceeded / serialize 失败时静默跳过，不阻断主流程 */
+    }
+  }, [
+    step, source, transactions, reimbursements, selectedIdx, selectedReimIdx,
+    accountMappings, rememberedRawNames, batchTagIds, batchMemberId,
+    pendingNewHoldings, qianjiStartDate, qianjiEndDate,
+    dupCount, reimDupCount, filteredOutCount,
+  ])
+
+  // 离开页面前警告：解析后只要还有数据没保存就拦截刷新/关闭
+  useEffect(() => {
+    const hasData = transactions.length > 0 || reimbursements.length > 0
+    if (!hasData) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Chrome 仍要求设置 returnValue 才会弹原生确认框
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [transactions.length, reimbursements.length])
 
   useEffect(() => {
     try { localStorage.setItem('qianji_tag_as_member', qianjiTagAsMember ? '1' : '0') } catch { /* ignore */ }
@@ -518,6 +624,8 @@ export default function ImportPage() {
       if (res.data.holdings_warnings?.length) {
         msg += '\n\n⚠ 投资份额提示：\n' + res.data.holdings_warnings.join('\n')
       }
+      // 保存成功 → 清掉本次草稿，下次打开 /import 不再弹"恢复草稿"
+      try { sessionStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
       alert(msg)
       navigate('/')
     } catch (err) {
