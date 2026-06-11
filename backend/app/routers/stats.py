@@ -769,10 +769,24 @@ async def networth_trend(db: AsyncSession = Depends(get_db)):
         )
         snaps = snap_r.scalars().all()
 
-        asset_cats = {"资金账户", "充值账户", "投资理财"}
-        liab_cats  = {"信用卡", "债务"}
-        assets = sum(s.balance for s in snaps if accounts.get(s.account_id) and accounts[s.account_id].category in asset_cats)
-        liabs  = sum(s.balance for s in snaps if accounts.get(s.account_id) and accounts[s.account_id].category in liab_cats)
+        # 资产类：资金/充值/投资理财/银行理财；信用卡固定算负债。
+        # 债务账户按余额正负动态分：>0 → 资产（别人欠我），<0 → 负债（我欠别人，取 abs）
+        asset_cats = {"资金账户", "充值账户", "投资理财", "银行理财"}
+        assets = 0.0
+        liabs = 0.0
+        for s in snaps:
+            acc = accounts.get(s.account_id)
+            if not acc:
+                continue
+            if acc.category in asset_cats:
+                assets += s.balance
+            elif acc.category == "信用卡":
+                liabs += s.balance
+            elif acc.category == "债务":
+                if s.balance >= 0:
+                    assets += s.balance
+                else:
+                    liabs += -s.balance
         result.append(NetWorthPoint(
             snapshot_date=str(d),
             total_assets=round(assets, 2),

@@ -90,11 +90,12 @@ export default function AccountDetailPage() {
     )
   }
 
-  const isCreditOrDebt = account.category === '信用卡' || account.category === '债务'
-  const balanceColor = isCreditOrDebt
+  // 信用卡固定显示为负数（余额=欠款）；债务按 current_balance 正负显示（正=别人欠我，负=我欠别人）
+  const isCredit = account.category === '信用卡'
+  const balanceColor = isCredit
     ? '#ef4444'
     : account.current_balance < 0 ? '#ef4444' : '#10b981'
-  const balanceStr = isCreditOrDebt
+  const balanceStr = isCredit
     ? `-¥${Math.abs(account.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
     : `${account.current_balance < 0 ? '-' : ''}¥${Math.abs(account.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
 

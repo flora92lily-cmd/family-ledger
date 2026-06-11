@@ -758,18 +758,34 @@ export default function StatsPage() {
                 filtered = accounts.filter(a => a.member_id === memberId)
               }
             }
-            const ASSET_CATS = ['资金账户', '充值账户', '投资理财']
-            const LIAB_CATS  = ['信用卡', '债务']
-            const assets  = filtered.filter(a => ASSET_CATS.includes(a.category))
-            const liabs   = filtered.filter(a => LIAB_CATS.includes(a.category))
+            // 资产类：资金/充值/投资理财/银行理财；信用卡固定算负债。
+            // 债务账户按余额正负动态分：>0 代表别人欠我 → 资产；<0 代表我欠别人 → 负债（取 abs）。
+            const ASSET_CATS = ['资金账户', '充值账户', '投资理财', '银行理财']
+            const assets = [
+              ...filtered.filter(a => ASSET_CATS.includes(a.category)),
+              ...filtered.filter(a => a.category === '债务' && a.current_balance > 0),
+            ]
+            const liabs = [
+              ...filtered.filter(a => a.category === '信用卡'),
+              ...filtered.filter(a => a.category === '债务' && a.current_balance < 0),
+            ]
             const totalAsset = assets.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
-            const totalLiab  = liabs.reduce((s, a) => s + Math.max(0, a.current_balance), 0)
+            const totalLiab  = liabs.reduce((s, a) => s + Math.abs(Math.min(0, a.current_balance) || a.current_balance), 0)
             const netWorth   = totalAsset - totalLiab
 
-            const pieData = ASSET_CATS.map(cat => ({
-              name: cat,
-              value: assets.filter(a => a.category === cat).reduce((s, a) => s + Math.max(0, a.current_balance), 0),
-            })).filter(d => d.value > 0)
+            // 饼图：债务正余额并入资产构成，显示为"债务（应收）"
+            const pieData = [
+              ...ASSET_CATS.map(cat => ({
+                name: cat,
+                value: assets.filter(a => a.category === cat).reduce((s, a) => s + Math.max(0, a.current_balance), 0),
+              })),
+              {
+                name: '债务（应收）',
+                value: filtered
+                  .filter(a => a.category === '债务' && a.current_balance > 0)
+                  .reduce((s, a) => s + a.current_balance, 0),
+              },
+            ].filter(d => d.value > 0)
 
             const AccountRow = ({ acc, i }: { acc: Account; i: number }) => (
               <div key={acc.id} style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>

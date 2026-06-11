@@ -385,8 +385,8 @@ export default function SettingsPage() {
                   </div>
                 )}
               </div>
-              <span style={{ fontSize: 13, color: (cat === '信用卡' || cat === '债务') ? '#ef4444' : (a.current_balance < 0 ? '#ef4444' : '#10b981'), marginRight: 10 }}>
-                {(cat === '信用卡' || cat === '债务')
+              <span style={{ fontSize: 13, color: cat === '信用卡' ? '#ef4444' : (a.current_balance < 0 ? '#ef4444' : '#10b981'), marginRight: 10 }}>
+                {cat === '信用卡'
                   ? `-¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
                   : `${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
               </span>
