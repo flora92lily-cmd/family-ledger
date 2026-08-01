@@ -63,7 +63,7 @@ const SOURCES = [
   { value: 'alipay', label: '支付宝', icon: '🅰️', desc: '从支付宝导出的 CSV 账单' },
   { value: 'wechat', label: '微信支付', icon: '💚', desc: '从微信支付导出的 CSV 账单' },
   { value: 'bank_pdf', label: '银行账单', icon: '🏦', desc: '招商银行流水 PDF' },
-  { value: 'qianji', label: '钱迹', icon: '📒', desc: '钱迹 App 导出的 CSV 账本' },
+  { value: 'qianji', label: '钱迹', icon: '📒', desc: '钱迹 App 导出的 Excel / CSV 账本' },
   { value: 'jd', label: '京东', icon: '🛒', desc: '京东交易流水 CSV' },
   { value: 'generic', label: '通用 CSV', icon: '📋', desc: '其他记账软件导出的 CSV/Excel' },
 ]

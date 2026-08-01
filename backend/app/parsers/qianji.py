@@ -1,10 +1,10 @@
-"""钱迹（QianJi）账本 CSV 解析器
+"""钱迹（QianJi）账本解析器（支持新版 xlsx 与旧版 CSV）
 
-钱迹导出 CSV 格式：
-- UTF-8 BOM
-- 表头：ID, 时间, 分类, 二级分类, 类型, 金额, 币种, 账户1, 账户2, 备注,
+钱迹导出格式：
+- 新版：xlsx，表头新增“账本”列，时间格式为 YYYY-MM-DD HH:MM:SS
+- 旧版：UTF-8 BOM CSV，时间格式为 M/D/YYYY H:MM
+- 业务表头：ID, 时间, [账本], 分类, 二级分类, 类型, 金额, 币种, 账户1, 账户2, 备注,
         已报销, 手续费, 优惠券, 记账者, 账单标记, 标签, 账单图片, 关联账单
-- 时间格式：M/D/YYYY H:MM
 - 类型取值：支出 / 收入 / 还款 / 转账 / 报销 / 报销记录
   - 支出/收入 → 普通交易
   - 报销 → 可报销支出（is_reimbursable=True），账户1=扣款账户
@@ -22,6 +22,7 @@
 - source_parent_category_name = 钱迹一级分类（次选 fallback）
 """
 import csv
+import io
 from datetime import datetime
 from app.parsers.base import BaseParser, ParsedTransaction, ParsedReimbursement
 
@@ -31,6 +32,27 @@ class QianjiParser(BaseParser):
 
     def parse(self, file_bytes: bytes, filename: str = "") -> list:
         """返回混合列表：ParsedTransaction + ParsedReimbursement"""
+        if filename.lower().endswith(".xlsx") or file_bytes[:2] == b"PK":
+            return self._parse_xlsx(file_bytes)
+        return self._parse_csv(file_bytes)
+
+    def _parse_xlsx(self, file_bytes: bytes) -> list:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        try:
+            worksheet = workbook.active
+            rows = worksheet.iter_rows(values_only=True)
+            header_row = next(rows, None)
+            if not header_row:
+                return []
+
+            headers = [self._cell_text(cell) for cell in header_row]
+            return self._parse_rows(rows, headers)
+        finally:
+            workbook.close()
+
+    def _parse_csv(self, file_bytes: bytes) -> list:
         text = self._decode(file_bytes)
         lines = text.splitlines()
         if not lines:
@@ -38,6 +60,9 @@ class QianjiParser(BaseParser):
 
         reader = csv.reader(lines)
         headers = [h.strip() for h in next(reader)]
+        return self._parse_rows(reader, headers)
+
+    def _parse_rows(self, rows, headers: list[str]) -> list:
         col = {
             "id": self._find_col(headers, ["ID"]),
             "time": self._find_col(headers, ["时间"]),
@@ -54,7 +79,7 @@ class QianjiParser(BaseParser):
         }
 
         items: list = []
-        for row in reader:
+        for row in rows:
             if not row or len(row) < 6:
                 continue
             try:
@@ -64,6 +89,11 @@ class QianjiParser(BaseParser):
             except (ValueError, IndexError):
                 continue
         return items
+
+    def _cell_text(self, value) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
 
     def _decode(self, b: bytes) -> str:
         for enc in ("utf-8-sig", "utf-8", "gbk"):
@@ -85,10 +115,10 @@ class QianjiParser(BaseParser):
                     return i
         return -1
 
-    def _parse_row(self, row: list[str], col: dict):
+    def _parse_row(self, row: list | tuple, col: dict):
         def safe(key):
             idx = col.get(key, -1)
-            return row[idx].strip() if 0 <= idx < len(row) else ""
+            return self._cell_text(row[idx]) if 0 <= idx < len(row) else ""
 
         type_str = safe("type")
 
@@ -128,7 +158,7 @@ class QianjiParser(BaseParser):
                 note=note_text,
                 external_id=row_id,
                 linked_external_id=linked_id,
-                raw=",".join(row)[:200],
+                raw=",".join(self._cell_text(cell) for cell in row)[:200],
             )
 
         # 分支 2：账户1 + 账户2 同时非空 → transfer（覆盖 类型=转账/还款/借出/借入 等）
@@ -161,7 +191,7 @@ class QianjiParser(BaseParser):
                 source_category_name=None,
                 source_parent_category_name=None,
                 external_id=row_id,
-                raw=",".join(row)[:200],
+                raw=",".join(self._cell_text(cell) for cell in row)[:200],
             )
 
         # 分支 3：普通交易 / 报销支出
@@ -210,5 +240,5 @@ class QianjiParser(BaseParser):
             reimbursable_amount=reimbursable_amount,
             reimbursement_status=reimbursement_status,
             external_id=row_id,
-            raw=",".join(row)[:200],
+            raw=",".join(self._cell_text(cell) for cell in row)[:200],
         )
