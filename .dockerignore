@@ -1,0 +1,14 @@
+.git/
+.github/
+.claude/
+.codex/
+.env
+data/
+**/node_modules/
+backend/venv/
+backend/dist/
+frontend/dist/
+frontend/.vite/
+**/__pycache__/
+**/*.pyc
+backend/family_ledger.db*
