@@ -90,14 +90,9 @@ export default function AccountDetailPage() {
     )
   }
 
-  // 信用卡固定显示为负数（余额=欠款）；债务按 current_balance 正负显示（正=别人欠我，负=我欠别人）
-  const isCredit = account.category === '信用卡'
-  const balanceColor = isCredit
-    ? '#ef4444'
-    : account.current_balance < 0 ? '#ef4444' : '#10b981'
-  const balanceStr = isCredit
-    ? `-¥${Math.abs(account.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
-    : `${account.current_balance < 0 ? '-' : ''}¥${Math.abs(account.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
+  // 信用卡欠款为负数；还款超过欠款后可成为正数（溢缴款）。
+  const balanceColor = account.current_balance < 0 ? '#ef4444' : '#10b981'
+  const balanceStr = `${account.current_balance < 0 ? '-' : ''}¥${Math.abs(account.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
 
   return (
     <div className="page-content" style={{ paddingBottom: 40 }}>

@@ -108,7 +108,7 @@ class Account(Base):
     name = Column(String(100), nullable=False)         # 账户名，如"招行储蓄卡"
     icon = Column(String(10), default="🏦")
     category = Column(String(20), nullable=False)      # 资金账户/信用卡/充值账户/债务/投资理财/银行理财
-    balance = Column(Float, default=0)                 # 余额（资金账户/充值账户）或欠款（信用卡/债务，正数）
+    balance = Column(Float, default=0)                 # 初始余额；信用卡欠款按负数存储
     member_id = Column(Integer, ForeignKey("family_members.id"), nullable=True)  # 归属家庭成员（NULL=未指定/共有）
     note = Column(String(500), default="")
     sort_order = Column(Integer, default=0)

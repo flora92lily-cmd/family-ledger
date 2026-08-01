@@ -105,7 +105,10 @@ export default function SettingsPage() {
     setEditAccountId(a.id)
     setAccountForm({
       name: a.name, icon: a.icon, category: a.category,
-      balance: a.balance, member_id: a.member_id, note: a.note, sort_order: a.sort_order,
+      // 信用卡表单填写的是“欠款”，界面中始终用正数方便输入；
+      // 保存时由后端统一转换为负余额。
+      balance: a.category === '信用卡' ? Math.abs(a.balance) : a.balance,
+      member_id: a.member_id, note: a.note, sort_order: a.sort_order,
       tag_ids: a.tags.map(t => t.id),
     })
     setShowAccountModal(true)
@@ -385,10 +388,8 @@ export default function SettingsPage() {
                   </div>
                 )}
               </div>
-              <span style={{ fontSize: 13, color: cat === '信用卡' ? '#ef4444' : (a.current_balance < 0 ? '#ef4444' : '#10b981'), marginRight: 10 }}>
-                {cat === '信用卡'
-                  ? `-¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
-                  : `${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
+              <span style={{ fontSize: 13, color: a.current_balance < 0 ? '#ef4444' : '#10b981', marginRight: 10 }}>
+                {`${a.current_balance < 0 ? '-' : ''}¥${Math.abs(a.current_balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
               </span>
               <button onClick={(e) => { e.stopPropagation(); openEditAccount(a) }}
                 style={{ background: 'none', border: 'none', fontSize: 13, color: '#6b7280', cursor: 'pointer', marginRight: 6 }}>编辑</button>
