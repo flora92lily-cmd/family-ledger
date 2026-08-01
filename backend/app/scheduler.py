@@ -17,7 +17,6 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.database import async_session
-from app.account_balance import normalize_initial_balance
 from app.models import Holding, Account, AccountSnapshot, HoldingSnapshot, RecurringRule, RecurringExecution, Transaction, transaction_tags
 from app.price_service import fetch_price
 
@@ -299,12 +298,7 @@ async def take_snapshots() -> tuple[int, int]:
             if a.category == "投资理财":
                 cb = round(holding_val.get(a.id, 0), 2)
             else:
-                cb = round(
-                    normalize_initial_balance(a.category, a.balance)
-                    + delta.get(a.id, 0)
-                    + holding_val.get(a.id, 0),
-                    2,
-                )
+                cb = round(a.balance + delta.get(a.id, 0) + holding_val.get(a.id, 0), 2)
             try:
                 await db.execute(
                     sqlite_insert(AccountSnapshot).values(

@@ -5,7 +5,6 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Account, Transaction, Holding, Tag, ReimbursementRecord, account_tags
 from app.schemas import AccountCreate, AccountUpdate, AccountOut
-from app.account_balance import normalize_initial_balance
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -81,16 +80,13 @@ async def _with_current_balance(accounts: list[Account], db: AsyncSession) -> li
         if a.category == "投资理财":
             cb = round(holding_value[a.id], 2)
         else:
-            initial_balance = normalize_initial_balance(a.category, a.balance)
-            cb = round(initial_balance + delta[a.id] + holding_value[a.id], 2)
+            cb = round(a.balance + delta[a.id] + holding_value[a.id], 2)
         d = {
             "id": a.id,
             "name": a.name,
             "icon": a.icon,
             "category": a.category,
-            # Return the normalized value as well, so legacy credit-card rows
-            # that stored debt as a positive number are corrected immediately.
-            "balance": normalize_initial_balance(a.category, a.balance),
+            "balance": a.balance,
             "current_balance": cb,
             "member_id": a.member_id,
             "note": a.note,
@@ -132,7 +128,6 @@ async def list_accounts(
 @router.post("/", response_model=AccountOut)
 async def create_account(data: AccountCreate, db: AsyncSession = Depends(get_db)):
     payload = data.model_dump(exclude={"tag_ids"})
-    payload["balance"] = normalize_initial_balance(payload["category"], payload["balance"])
     account = Account(**payload)
     db.add(account)
     await db.flush()
@@ -149,7 +144,6 @@ async def update_account(account_id: int, data: AccountUpdate, db: AsyncSession 
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
     payload = data.model_dump(exclude={"tag_ids"})
-    payload["balance"] = normalize_initial_balance(payload["category"], payload["balance"])
     for k, v in payload.items():
         setattr(account, k, v)
     await _set_tags(account_id, data.tag_ids, db)

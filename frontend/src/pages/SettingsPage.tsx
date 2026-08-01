@@ -38,6 +38,7 @@ export default function SettingsPage() {
   const [showAccountModal, setShowAccountModal] = useState(false)
   const [editAccountId, setEditAccountId] = useState<number | null>(null)
   const [accountForm, setAccountForm] = useState({ ...EMPTY_ACCOUNT_FORM })
+  const [accountBalanceInput, setAccountBalanceInput] = useState('0')
 
   // ─── 家庭成员 ──────────────────────────────────────────────────
   const [members, setMembers] = useState<FamilyMember[]>([])
@@ -98,6 +99,7 @@ export default function SettingsPage() {
   const openAddAccount = () => {
     setEditAccountId(null)
     setAccountForm({ ...EMPTY_ACCOUNT_FORM })
+    setAccountBalanceInput('0')
     setShowAccountModal(true)
   }
 
@@ -105,21 +107,23 @@ export default function SettingsPage() {
     setEditAccountId(a.id)
     setAccountForm({
       name: a.name, icon: a.icon, category: a.category,
-      // 信用卡表单填写的是“欠款”，界面中始终用正数方便输入；
-      // 保存时由后端统一转换为负余额。
-      balance: a.category === '信用卡' ? Math.abs(a.balance) : a.balance,
+      balance: a.balance,
       member_id: a.member_id, note: a.note, sort_order: a.sort_order,
       tag_ids: a.tags.map(t => t.id),
     })
+    setAccountBalanceInput(String(a.balance))
     setShowAccountModal(true)
   }
 
   const saveAccount = async () => {
     if (!accountForm.name.trim()) return alert('请输入账户名称')
+    const balance = Number(accountBalanceInput)
+    if (!Number.isFinite(balance)) return alert('请输入正确的初始余额')
+    const payload = { ...accountForm, balance }
     if (editAccountId !== null) {
-      await accountApi.update(editAccountId, accountForm)
+      await accountApi.update(editAccountId, payload)
     } else {
-      await accountApi.create(accountForm)
+      await accountApi.create(payload)
     }
     setShowAccountModal(false)
     loadAccounts()
@@ -539,12 +543,12 @@ export default function SettingsPage() {
             </div>
 
             <label style={labelStyle}>
-              {accountForm.category === '信用卡' ? '初始欠款（元）' : accountForm.category === '债务' ? '初始债务（元）' : '初始余额（元）'}
+              {accountForm.category === '信用卡' ? '初始余额（欠款填负数）' : accountForm.category === '债务' ? '初始债务（元）' : '初始余额（元）'}
               <span style={{ color: '#9ca3af', fontSize: 11, marginLeft: 4 }}>记账后自动联动</span>
             </label>
             <input style={inputStyle} type="number" placeholder="0.00"
-              value={accountForm.balance}
-              onChange={e => setAccountForm(f => ({ ...f, balance: parseFloat(e.target.value) || 0 }))} />
+              value={accountBalanceInput}
+              onChange={e => setAccountBalanceInput(e.target.value)} />
 
             {/* 归属成员 */}
             {members.length > 0 && (
